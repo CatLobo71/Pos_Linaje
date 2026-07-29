@@ -1,0 +1,1424 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"> <!-- Bloquea el zoom accidental en iPad -->
+    <title>Linaje del Sabor - POS & Sistema Integral de Gestión</title>
+    
+    <!-- Etiquetas PWA exclusivas para iPad/iOS -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="POS Linaje">
+    <!-- Opcional: Agrega la ruta a tu logo para el ícono de la app en la pantalla de inicio -->
+    <!-- <link rel="apple-touch-icon" href="ruta/a/tu/logo.png"> -->
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Plugin para mostrar etiquetas de datos directamente sobre las gráficas -->
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+    <!-- html2pdf.js para exportación directa a PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <!-- SheetJS para leer archivos Excel al importar ventas históricas -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <style>
+        :root {
+            --primary-color: #8B0000; /* Guinda */
+            --accent-color: #d87f19;  /* Ámbar */
+            --bg-light: #82878d;
+        }
+
+        /* Ajustes base para iPad */
+        * {
+            -webkit-tap-highlight-color: transparent; /* Elimina el sombreado gris nativo al tocar */
+        }
+
+        body {
+            background-color: var(--bg-light);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            -webkit-font-smoothing: antialiased; /* Suavizado de fuentes en iOS */
+        }
+
+        .sidebar {
+            height: 100vh;
+            width: 250px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            background-color: #4b4b4e;
+            color: rgb(8, 8, 8);
+            padding-top: 20px;
+            z-index: 100;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch; /* Desplazamiento fluido en iPad */
+        }
+
+        .sidebar .nav-link {
+            color: #9CA3AF;
+            margin: 4px 12px;
+            border-radius: 8px;
+            transition: all 0.3s;
+            font-size: 0.95rem;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .sidebar .nav-link:hover, .sidebar .nav-link.active {
+            color: white;
+            background-color: var(--primary-color);
+        }
+
+        .main-content {
+            margin-left: 250px;
+            padding: 25px;
+        }
+
+        .card-custom {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            background-color: rgb(209, 208, 208);
+        }
+
+        /* Optimización de tarjetas de productos para evitar selección accidental */
+        .product-card {
+            border: 1px solid #92959c;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* Deshabilita el hover persistente en pantallas táctiles */
+        @media (hover: hover) {
+            .product-card:hover {
+                transform: translateY(-3px);
+                box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+                border-color: var(--accent-color);
+            }
+        }
+
+        .ticket-box {
+            max-height: 420px;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .metric-card {
+            border-left: 4px solid var(--primary-color);
+        }
+
+        .category-badge {
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* Scroll fluido para todas las tablas con desplazamiento horizontal o vertical */
+        .table-responsive {
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* Estilo para el Ticket de Papel Termico */
+        .ticket-paper {
+            width: 280px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 15px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+            color: #000;
+            border: 1px dashed #ccc;
+            box-shadow: 0 0 8px rgba(0,0,0,0.1);
+        }
+
+        .excel-table th, .excel-table td {
+            padding: 4px 8px;
+            font-size: 0.88rem;
+        }
+
+        @media print {
+            body * { visibility: hidden; }
+            #printable-ticket, #printable-ticket * { visibility: visible; }
+            #printable-ticket { 
+                position: absolute; 
+                left: 0; 
+                top: 0; 
+                width: 80mm; 
+                margin: 0; 
+                padding: 5px; 
+                border: none; 
+                box-shadow: none; 
+            }
+        }
+
+        /* Contenedor de notificaciones (toasts) */
+        #toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1080;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-width: 340px;
+        }
+
+        .sale-row-canceled {
+            opacity: 0.65;
+        }
+
+        .btn-action-icon {
+            width: 34px;
+        }
+        
+        /* Botones e inputs optimizados para touch */
+        .btn {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navegación Lateral -->
+    <div class="sidebar d-flex flex-column justify-content-between">
+        <div>
+            <div class="px-3 mb-4 text-center">
+                <img id="brand-logo-sidebar" alt="Linaje del Sabor" class="mb-2" style="width:80px; height:80px; object-fit:contain; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4));">
+                <h4 class="fw-bold text-warning m-0">Linaje del Sabor</h4>
+                <small class="text-muted">Sistema POS & Control</small>
+            </div>
+            <ul class="nav nav-pills flex-column">
+                <li class="nav-item">
+                    <a class="nav-link active" id="btn-pos" href="#" onclick="showSection('pos')">
+                        <i class="fa-solid fa-cash-register me-2"></i>Punto de Venta
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" id="btn-catalog" href="#" onclick="showSection('catalog')">
+                        <i class="fa-solid fa-boxes-packing me-2"></i>Catálogo
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" id="btn-dashboard" href="#" onclick="showSection('dashboard')">
+                        <i class="fa-solid fa-chart-line me-2"></i>Dashboard
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" id="btn-reports" href="#" onclick="showSection('reports')">
+                        <i class="fa-solid fa-file-invoice-dollar me-2"></i>Reportes de Ventas
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" id="btn-expenses" href="#" onclick="showSection('expenses')">
+                        <i class="fa-solid fa-wallet me-2"></i>Registro de Gastos
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" id="btn-tips" href="#" onclick="showSection('tips')">
+                        <i class="fa-solid fa-hand-holding-dollar me-2"></i>Propinas & Personal
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" id="btn-corte" href="#" onclick="showSection('corte')">
+                        <i class="fa-solid fa-calculator me-2"></i>Corte de Caja
+                    </a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link" id="btn-import" href="#" onclick="showSection('import')">
+                        <i class="fa-solid fa-file-import me-2"></i>Importar Ventas
+                    </a>
+                </li>
+            </ul>
+        </div>
+        <div class="px-3 pb-3 text-center text-muted border-top border-secondary pt-2">
+            <small class="d-block mb-2" id="storage-status-indicator"><i class="fa-solid fa-circle-check text-success me-1"></i>Guardado local activo</small>
+            <div class="d-grid gap-1 mb-2">
+                <button class="btn btn-outline-light btn-sm" onclick="exportBackup()"><i class="fa-solid fa-download me-1"></i>Exportar Respaldo</button>
+                <button class="btn btn-outline-light btn-sm" onclick="document.getElementById('import-backup-input').click()"><i class="fa-solid fa-upload me-1"></i>Importar Respaldo</button>
+                <input type="file" id="import-backup-input" accept="application/json" style="display:none" onchange="importBackup(event)">
+            </div>
+            <small>Sistema POS v3.5</small>
+        </div>
+    </div>
+
+    <!-- Contenedor de Notificaciones -->
+    <div id="toast-container"></div>
+
+    <!-- Contenido Principal -->
+    <div class="main-content">
+
+        <!-- SECCIÓN 1: PUNTO DE VENTA (POS) -->
+        <div id="section-pos">
+            <div class="row g-3">
+                <div class="col-md-7">
+                    <div class="card card-custom p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h5 class="fw-bold m-0"><i class="fa-solid fa-store me-2"></i>Catálogo de Productos</h5>
+                            <span class="badge bg-danger">Menú Activo</span>
+                        </div>
+                        <div class="d-flex gap-2 mb-3 flex-wrap" id="category-filters"></div>
+                        <div class="row g-3" id="product-grid"></div>
+                    </div>
+                </div>
+
+                <!-- Detalle de Venta / Ticket -->
+                <div class="col-md-5">
+                    <div class="card card-custom p-3">
+                        <h5 class="fw-bold mb-3"><i class="fa-solid fa-receipt me-2"></i>Orden Actual</h5>
+                        
+                        <div class="ticket-box mb-3">
+                            <table class="table table-hover table-sm align-middle">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Producto / Detalle</th>
+                                        <th class="text-center">Cant.</th>
+                                        <th class="text-end">Precio</th>
+                                        <th class="text-end">Total</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="cart-table-body">
+                                    <tr>
+                                        <td colspan="5" class="text-center text-muted py-4">No hay productos en la orden</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="border-top pt-2">
+                            <div class="d-flex justify-content-between mb-1 text-muted">
+                                <span>Subtotal (Sin IVA):</span>
+                                <span id="summary-subtotal" class="fw-bold">$0.00</span>
+                            </div>
+                            <div class="d-flex justify-content-between mb-1 text-muted">
+                                <span>IVA Desglosado (16%):</span>
+                                <span id="summary-tax">$0.00</span>
+                            </div>
+                            <div class="d-flex justify-content-between mb-3 h4 fw-bold text-danger border-top pt-2">
+                                <span>Total (IVA Inc.):</span>
+                                <span id="summary-total">$0.00</span>
+                            </div>
+                            
+                            <button class="btn btn-danger w-100 btn-lg fw-bold" onclick="openCheckoutModal()">
+                                <i class="fa-solid fa-credit-card me-2"></i>Proceder al Cobro
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECCIÓN 2: GESTIÓN DE CATÁLOGO -->
+        <div id="section-catalog" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4 class="fw-bold m-0"><i class="fa-solid fa-boxes-packing me-2"></i>Administración de Catálogo</h4>
+            </div>
+
+            <ul class="nav nav-tabs mb-3" id="catalogTabs">
+                <li class="nav-item"><button class="nav-link active fw-bold" onclick="switchCatalogTab('products-tab', event)">Productos</button></li>
+                <li class="nav-item"><button class="nav-link fw-bold" onclick="switchCatalogTab('categories-tab', event)">Categorías</button></li>
+                <li class="nav-item"><button class="nav-link fw-bold" onclick="switchCatalogTab('stews-tab', event)">Guisados</button></li>
+                <li class="nav-item"><button class="nav-link fw-bold" onclick="switchCatalogTab('flavors-tab', event)">Sabores</button></li>
+                <li class="nav-item"><button class="nav-link fw-bold" onclick="switchCatalogTab('sizes-tab', event)">Tamaños</button></li>
+            </ul>
+
+            <div id="tab-products-tab" class="catalog-tab-content">
+                <div class="card card-custom p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="fw-bold m-0">Lista de Productos</h6>
+                        <button class="btn btn-danger btn-sm fw-bold" onclick="openNewProductModal()"><i class="fa-solid fa-plus me-1"></i>Nuevo Producto</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Nombre</th>
+                                    <th>Categoría</th>
+                                    <th>¿Guisados?</th>
+                                    <th>¿Sabores?</th>
+                                    <th>Variantes / Precios (IVA inc.)</th>
+                                    <th class="text-end">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="admin-products-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div id="tab-categories-tab" class="catalog-tab-content" style="display:none;">
+                <div class="card card-custom p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="fw-bold m-0">Categorías de Menú</h6>
+                        <button class="btn btn-danger btn-sm fw-bold" onclick="promptAddCategory()"><i class="fa-solid fa-plus me-1"></i>Nueva Categoría</button>
+                    </div>
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr><th>ID</th><th>Nombre</th><th>Icono</th><th class="text-end">Acciones</th></tr>
+                        </thead>
+                        <tbody id="admin-categories-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="tab-stews-tab" class="catalog-tab-content" style="display:none;">
+                <div class="card card-custom p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="fw-bold m-0">Guisados y Rellenos</h6>
+                        <button class="btn btn-danger btn-sm fw-bold" onclick="promptAddStew()"><i class="fa-solid fa-plus me-1"></i>Nuevo Guisado</button>
+                    </div>
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr><th>Nombre del Guisado</th><th class="text-end">Acciones</th></tr>
+                        </thead>
+                        <tbody id="admin-stews-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="tab-flavors-tab" class="catalog-tab-content" style="display:none;">
+                <div class="card card-custom p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="fw-bold m-0">Sabores de Bebidas / Complementos</h6>
+                        <button class="btn btn-danger btn-sm fw-bold" onclick="promptAddFlavor()"><i class="fa-solid fa-plus me-1"></i>Nuevo Sabor</button>
+                    </div>
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr><th>Sabor</th><th class="text-end">Acciones</th></tr>
+                        </thead>
+                        <tbody id="admin-flavors-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="tab-sizes-tab" class="catalog-tab-content" style="display:none;">
+                <div class="card card-custom p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="fw-bold m-0">Tamaños y Presentaciones</h6>
+                        <button class="btn btn-danger btn-sm fw-bold" onclick="promptAddSize()"><i class="fa-solid fa-plus me-1"></i>Nuevo Tamaño</button>
+                    </div>
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr><th>Tamaño / Presentación</th><th class="text-end">Acciones</th></tr>
+                        </thead>
+                        <tbody id="admin-sizes-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECCIÓN 3: DASHBOARD ANALÍTICO -->
+        <div id="section-dashboard" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h4 class="fw-bold m-0"><i class="fa-solid fa-chart-pie me-2"></i>Dashboard Analítico de Negocio</h4>
+                <div>
+                    <select class="form-select form-select-sm d-inline-block w-auto" id="dashboard-year-select" onchange="updateDashboardMetrics()">
+                        <!-- Dinámico con años -->
+                    </select>
+                </div>
+            </div>
+            
+            <!-- Tarjetas de Métricas Principales -->
+            <div class="row g-3 mb-4">
+                <div class="col-md-3">
+                    <div class="card card-custom p-3 metric-card">
+                        <span class="text-muted small">Ventas del Día</span>
+                        <h4 class="fw-bold text-dark m-0" id="dash-sales-day">$0.00</h4>
+                        <small class="text-muted">Ticket Promedio: <span id="dash-avg-day" class="fw-bold">$0.00</span></small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card card-custom p-3 metric-card" style="border-left-color: #10B981;">
+                        <span class="text-muted small">Ventas Semanales</span>
+                        <h4 class="fw-bold text-dark m-0" id="dash-sales-week">$0.00</h4>
+                        <small class="text-muted">Ticket Promedio: <span id="dash-avg-week" class="fw-bold">$0.00</span></small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card card-custom p-3 metric-card" style="border-left-color: #F59E0B;">
+                        <span class="text-muted small">Ventas Mensuales</span>
+                        <h4 class="fw-bold text-dark m-0" id="dash-sales-month">$0.00</h4>
+                        <small class="text-muted">Ticket Promedio: <span id="dash-avg-month" class="fw-bold">$0.00</span></small>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card card-custom p-3 metric-card" style="border-left-color: #6366F1;">
+                        <span class="text-muted small">Ventas Anuales</span>
+                        <h4 class="fw-bold text-dark m-0" id="dash-sales-year">$0.00</h4>
+                        <small class="text-muted">Ticket Promedio: <span id="dash-avg-year" class="fw-bold">$0.00</span></small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Ventas por cada año registrado (se genera solo según los años que haya en el historial) -->
+            <div class="row g-3 mb-4" id="dash-year-cards-row"></div>
+
+            <!-- Gráficas Principales -->
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <div class="card card-custom p-3">
+                        <h6 class="fw-bold mb-3"><i class="fa-solid fa-chart-line me-2 text-danger"></i>Ventas del Mes por Días</h6>
+                        <div style="height: 280px;"><canvas id="chartMonthDays"></canvas></div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card card-custom p-3">
+                        <h6 class="fw-bold mb-3"><i class="fa-solid fa-chart-column me-2 text-success"></i>Ventas del Mes por Semana</h6>
+                        <div style="height: 280px;"><canvas id="chartMonthWeeks"></canvas></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <div class="card card-custom p-3">
+                        <h6 class="fw-bold mb-3"><i class="fa-solid fa-chart-bar me-2 text-warning"></i>Ventas del Año por Mes</h6>
+                        <div style="height: 280px;"><canvas id="chartYearMonths"></canvas></div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card card-custom p-3">
+                        <h6 class="fw-bold mb-3"><i class="fa-solid fa-chart-area me-2 text-primary"></i>Comparativa por Mes entre Años (Ene 2024 vs Ene 2025 vs Ene 2026...)</h6>
+                        <div style="height: 250px;"><canvas id="chartYearComparison"></canvas></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <div class="card card-custom p-3">
+                        <h6 class="fw-bold mb-3"><i class="fa-solid fa-chart-line me-2 text-danger"></i>Ventas del Año por Semanas</h6>
+                        <div style="height: 280px;"><canvas id="chartYearWeeks"></canvas></div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card card-custom p-3">
+                        <h6 class="fw-bold mb-3"><i class="fa-solid fa-chart-line me-2 text-info"></i>Ventas del Año por Días</h6>
+                        <div style="height: 280px;"><canvas id="chartYearDays"></canvas></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-12">
+                    <div class="card card-custom p-3">
+                        <h6 class="fw-bold mb-3"><i class="fa-solid fa-chart-area me-2 text-primary"></i>Comparativa por Semana entre Años (Sem 1 2024 vs Sem 1 2025 vs Sem 1 2026...)</h6>
+                        <div style="height: 280px;"><canvas id="chartWeekComparison"></canvas></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Estadísticas por año: totales, semana/día más alto y más bajo, promedio semanal -->
+            <div class="row g-3 mb-4">
+                <div class="col-12">
+                    <div class="card card-custom p-3">
+                        <h6 class="fw-bold mb-3"><i class="fa-solid fa-ranking-star me-2 text-warning"></i>Estadísticas por Año</h6>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover align-middle mb-0">
+                                <thead>
+                                    <tr class="table-light">
+                                        <th>Año</th>
+                                        <th class="text-end">Ventas Totales</th>
+                                        <th class="text-end">Semana Más Alta</th>
+                                        <th class="text-end">Semana Más Baja</th>
+                                        <th class="text-end">Día Más Alto</th>
+                                        <th class="text-end">Día Más Bajo</th>
+                                        <th class="text-end">Promedio Semanal</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="year-stats-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Promedio de venta semanal por mes, del año seleccionado en el filtro de arriba -->
+            <div class="row g-3 mb-4">
+                <div class="col-12">
+                    <div class="card card-custom p-3">
+                        <h6 class="fw-bold mb-3"><i class="fa-solid fa-calendar-week me-2 text-success"></i>Promedio de Venta Semanal por Mes <span id="weekly-avg-year-label" class="text-muted small"></span></h6>
+                        <p class="small text-muted mb-2">Cada mes se divide en semanas de días 1-7, 8-14, 15-21 y 22-fin (igual que la gráfica "Ventas del Mes por Semana"); el promedio solo cuenta las semanas de ese mes que tuvieron ventas.</p>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover align-middle mb-0">
+                                <thead>
+                                    <tr class="table-light">
+                                        <th>Mes</th>
+                                        <th class="text-end">Promedio Semanal</th>
+                                        <th class="text-end">Semanas con Venta</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="monthly-weekly-avg-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Desgloses por Productos y Guisados -->
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <div class="card card-custom p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="fw-bold m-0"><i class="fa-solid fa-boxes-stacked me-2 text-danger"></i>Desglose por Productos</h6>
+                            <select class="form-select form-select-sm w-auto" id="breakdown-prod-period" onchange="updateProductBreakdown()">
+                                <option value="day">Día</option>
+                                <option value="week">Semana</option>
+                                <option value="month" selected>Mes</option>
+                                <option value="year">Año</option>
+                            </select>
+                        </div>
+                        <div class="table-responsive" style="max-height: 250px; overflow-y:auto;">
+                            <table class="table table-sm table-hover align-middle excel-table">
+                                <thead class="table-light">
+                                    <tr><th>Producto</th><th class="text-center">Cant.</th><th class="text-end">Total ($)</th></tr>
+                                </thead>
+                                <tbody id="breakdown-products-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <div class="card card-custom p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="fw-bold m-0"><i class="fa-solid fa-bowl-rice me-2 text-success"></i>Desglose por Guisados</h6>
+                            <select class="form-select form-select-sm w-auto" id="breakdown-stew-period" onchange="updateStewBreakdown()">
+                                <option value="day">Día</option>
+                                <option value="week">Semana</option>
+                                <option value="month" selected>Mes</option>
+                                <option value="year">Año</option>
+                            </select>
+                        </div>
+                        <div class="table-responsive" style="max-height: 250px; overflow-y:auto;">
+                            <table class="table table-sm table-hover align-middle excel-table">
+                                <thead class="table-light">
+                                    <tr><th>Guisado</th><th class="text-center">Cant.</th><th class="text-end">Total Est. ($)</th></tr>
+                                </thead>
+                                <tbody id="breakdown-stews-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECCIÓN 4: REPORTES DE VENTAS -->
+        <div id="section-reports" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4 class="fw-bold m-0"><i class="fa-solid fa-file-invoice-dollar me-2"></i>Reportes de Ventas Filtrados</h4>
+                <button class="btn btn-success fw-bold" onclick="exportReportData()">
+                    <i class="fa-solid fa-file-excel me-1"></i>Exportar Vista
+                </button>
+            </div>
+
+            <div class="card card-custom p-3 mb-4 border-start border-4 border-danger">
+                <h6 class="fw-bold mb-3"><i class="fa-solid fa-filter me-2"></i>Filtros de Reporte</h6>
+                <div class="row g-3">
+                    <div class="col-md-2">
+                        <label class="form-label small fw-bold">Fecha Inicio:</label>
+                        <input type="date" class="form-control form-control-sm" id="rep-filter-start-date" onchange="applyReportFilters()">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small fw-bold">Fecha Fin:</label>
+                        <input type="date" class="form-control form-control-sm" id="rep-filter-end-date" onchange="applyReportFilters()">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small fw-bold">Estatus:</label>
+                        <select class="form-select form-select-sm" id="rep-filter-status" onchange="applyReportFilters()">
+                            <option value="ALL">-- Todos --</option>
+                            <option value="PAGADO">PAGADO</option>
+                            <option value="PENDIENTE">PENDIENTE</option>
+                            <option value="CANCELADO">CANCELADO</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small fw-bold">Categoría:</label>
+                        <select class="form-select form-select-sm" id="rep-filter-category" onchange="applyReportFilters()"></select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small fw-bold">Producto:</label>
+                        <select class="form-select form-select-sm" id="rep-filter-product" onchange="applyReportFilters()"></select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small fw-bold">Guisado:</label>
+                        <select class="form-select form-select-sm" id="rep-filter-stew" onchange="applyReportFilters()"></select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card card-custom p-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <small class="text-muted">Ventas listadas: <strong id="rep-count-display">0</strong></small>
+                    <small class="text-muted"><i class="fa-solid fa-circle text-danger me-1"></i>Cancelada &nbsp; <i class="fa-solid fa-circle text-success me-1"></i>Pagada &nbsp; <i class="fa-solid fa-circle text-warning me-1"></i>Pendiente</small>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-striped align-middle">
+                        <thead>
+                            <tr>
+                                <th>Folio</th>
+                                <th>Fecha</th>
+                                <th>Estatus</th>
+                                <th>Servicio</th>
+                                <th>Método de Pago</th>
+                                <th>Items / Guisados</th>
+                                <th class="text-end">Total</th>
+                                <th class="text-center">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sales-history-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECCIÓN 5: REGISTRO DE GASTOS -->
+        <div id="section-expenses" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4 class="fw-bold m-0"><i class="fa-solid fa-wallet me-2"></i>Registro de Gastos Diarios</h4>
+                <button class="btn btn-danger btn-sm fw-bold" onclick="openExpenseModal()"><i class="fa-solid fa-plus me-1"></i>Nuevo Gasto</button>
+            </div>
+
+            <!-- Filtros para Exportación a Excel -->
+        <div class="card card-custom p-3 mb-4 border-start border-4 border-success">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h6 class="fw-bold m-0"><i class="fa-solid fa-filter me-2 text-success"></i>Filtros y Exportación de Gastos</h6>
+                <button class="btn btn-success btn-sm fw-bold" onclick="exportExpensesToExcel()">
+                    <i class="fa-solid fa-file-excel me-1"></i>Descargar Rango en Excel
+                </button>
+            </div>
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <label class="form-label small fw-bold">Fecha Inicio:</label>
+                    <input type="date" class="form-control form-control-sm" id="exp-filter-start">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small fw-bold">Fecha Fin:</label>
+                    <input type="date" class="form-control form-control-sm" id="exp-filter-end">
+                </div>
+            </div>
+        </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                    <div class="card card-custom p-3 border-start border-4 border-warning">
+                        <span class="text-muted small">Total Gastos Registrados</span>
+                        <h3 class="fw-bold text-dark m-0" id="total-expenses-display">$0.00</h3>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card card-custom p-3">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Concepto</th>
+                                <th>Categoría</th>
+                                <th class="text-end">Monto</th>
+                                <th class="text-center">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="expenses-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        
+        <!-- SECCIÓN 6: PROPINAS -->
+        <div id="section-tips" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4 class="fw-bold m-0"><i class="fa-solid fa-hand-holding-dollar me-2"></i>Módulo de Propinas y Distribución</h4>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-md-5">
+                    <div class="card card-custom p-3">
+                        <h6 class="fw-bold mb-3"><i class="fa-solid fa-calendar-plus me-2 text-danger"></i>Capturar Propinas del Día</h6>
+                        <form id="formTip" onsubmit="addTipRecord(event)" class="row g-2 mb-3">
+                            <div class="col-6">
+                                <label class="form-label small fw-bold">Fecha:</label>
+                                <input type="date" id="tip-date" class="form-control form-control-sm" required>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label small fw-bold">Importe ($):</label>
+                                <input type="number" step="0.50" id="tip-amount" class="form-control form-control-sm" placeholder="0.00" required>
+                            </div>
+                            <div class="col-12 text-end mt-2">
+                                <button type="submit" class="btn btn-danger btn-sm fw-bold w-100"><i class="fa-solid fa-plus me-1"></i>Registrar Propina</button>
+                            </div>
+                        </form>
+
+                        <h6 class="fw-bold border-top pt-2">Historial de Propinas</h6>
+                        <div class="table-responsive" style="max-height: 280px; overflow-y:auto;">
+                            <table class="table table-sm table-bordered excel-table text-center bg-warning bg-opacity-10">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>FECHA</th>
+                                        <th>IMPORTE</th>
+                                        <th>ACCIÓN</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tips-history-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-7">
+                    <div class="card card-custom p-3">
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h6 class="fw-bold m-0"><i class="fa-solid fa-users me-2 text-primary"></i>Colaboradores & Porcentajes de Reparto</h6>
+                            <button class="btn btn-outline-danger btn-sm fw-bold" onclick="addColaborador()"><i class="fa-solid fa-user-plus me-1"></i>Alta Colaborador</button>
+                        </div>
+
+                        <div class="p-3 mb-3 bg-warning bg-opacity-25 rounded border border-warning">
+                            <div class="row g-2 align-items-center">
+                                <div class="col-6 fw-bold">TOTAL PROPINAS ACUMULADAS:</div>
+                                <div class="col-6 text-end fw-bold fs-5 text-dark" id="tips-total-accumulated">$0.00</div>
+
+                                <div class="col-6 fw-bold">ENTREGADO / DISPERSADO:</div>
+                                <div class="col-6 text-end">
+                                    <input type="number" step="0.50" id="tips-delivered-input" class="form-control form-control-sm text-end fw-bold text-success d-inline-block w-75" value="0.00" oninput="calculateTipsDistribution()">
+                                </div>
+
+                                <div class="col-6 fw-bold text-danger border-top pt-1">REMANENTE A REPARTIR:</div>
+                                <div class="col-6 text-end fw-bold fs-5 text-danger border-top pt-1" id="tips-remaining-display">$0.00</div>
+                            </div>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="table table-sm table-bordered excel-table align-middle text-center">
+                                <thead class="table-warning">
+                                    <tr>
+                                        <th>COLABORADOR</th>
+                                        <th>PORCENTAJE (%)</th>
+                                        <th>MONTO A RECIBIR ($)</th>
+                                        <th>ACCIONES</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="colaboradores-tbody"></tbody>
+                                <tfoot>
+                                    <tr class="table-success fw-bold" id="colaboradores-foot-row">
+                                        <td>TOTAL</td>
+                                        <td id="total-colab-pct">0.00%</td>
+                                        <td id="total-colab-amount">$0.00</td>
+                                        <td></td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECCIÓN 7: CORTE DE CAJA -->
+        <div id="section-corte" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4 class="fw-bold m-0"><i class="fa-solid fa-calculator me-2"></i>Módulo para Corte de Venta</h4>
+                <button class="btn btn-outline-dark btn-sm" onclick="recalculateCorte()"><i class="fa-solid fa-rotate me-1"></i>Actualizar Valores</button>
+            </div>
+
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <div class="card card-custom p-3 bg-light">
+                        <h6 class="fw-bold mb-2 text-success"><i class="fa-solid fa-coins me-2"></i>Conteo de Efectivo y Cambio</h6>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-borderless align-middle excel-table">
+                                <thead class="table-secondary">
+                                    <tr>
+                                        <th>CONCEPTO</th>
+                                        <th class="text-center">CANT/VALOR</th>
+                                        <th class="text-end">TOTAL ($)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td><strong>CAMBIO / FONDO DE CAJA</strong></td>
+                                        <td><input type="number" id="corte-cambio-qty" class="form-control form-control-sm text-center" value="2050" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end fw-bold" id="corte-cambio-total">$2,050.00</td>
+                                    </tr>
+                                    <tr class="table-light"><td colspan="3"><strong>BILLETES</strong></td></tr>
+                                    <tr>
+                                        <td>$500.00</td>
+                                        <td><input type="number" id="b-500" class="form-control form-control-sm text-center bill-input" value="6" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end bill-total" id="tot-b-500">$0.00</td>
+                                    </tr>
+                                    <tr>
+                                        <td>$200.00</td>
+                                        <td><input type="number" id="b-200" class="form-control form-control-sm text-center bill-input" value="6" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end bill-total" id="tot-b-200">$0.00</td>
+                                    </tr>
+                                    <tr>
+                                        <td>$100.00</td>
+                                        <td><input type="number" id="b-100" class="form-control form-control-sm text-center bill-input" value="29" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end bill-total" id="tot-b-100">$0.00</td>
+                                    </tr>
+                                    <tr>
+                                        <td>$50.00</td>
+                                        <td><input type="number" id="b-50" class="form-control form-control-sm text-center bill-input" value="30" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end bill-total" id="tot-b-50">$0.00</td>
+                                    </tr>
+                                    <tr>
+                                        <td>$20.00</td>
+                                        <td><input type="number" id="b-20" class="form-control form-control-sm text-center bill-input" value="15" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end bill-total" id="tot-b-20">$0.00</td>
+                                    </tr>
+                                    <tr class="table-secondary fw-bold">
+                                        <td colspan="2">TOTAL BILLETES</td>
+                                        <td class="text-end text-success" id="tot-billetes">$0.00</td>
+                                    </tr>
+
+                                    <tr class="table-light"><td colspan="3"><strong>MONEDAS</strong></td></tr>
+                                    <tr>
+                                        <td>$10.00</td>
+                                        <td><input type="number" id="m-10" class="form-control form-control-sm text-center coin-input" value="8" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end coin-total" id="tot-m-10">$0.00</td>
+                                    </tr>
+                                    <tr>
+                                        <td>$5.00</td>
+                                        <td><input type="number" id="m-5" class="form-control form-control-sm text-center coin-input" value="41" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end coin-total" id="tot-m-5">$0.00</td>
+                                    </tr>
+                                    <tr>
+                                        <td>$2.00</td>
+                                        <td><input type="number" id="m-2" class="form-control form-control-sm text-center coin-input" value="8" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end coin-total" id="tot-m-2">$0.00</td>
+                                    </tr>
+                                    <tr>
+                                        <td>$1.00</td>
+                                        <td><input type="number" id="m-1" class="form-control form-control-sm text-center coin-input" value="67" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end coin-total" id="tot-m-1">$0.00</td>
+                                    </tr>
+                                    <tr>
+                                        <td>$0.50</td>
+                                        <td><input type="number" id="m-05" class="form-control form-control-sm text-center coin-input" value="14" oninput="calculateCorteCash()"></td>
+                                        <td class="text-end coin-total" id="tot-m-05">$0.00</td>
+                                    </tr>
+                                    <tr class="table-secondary fw-bold">
+                                        <td colspan="2">TOTAL MONEDAS</td>
+                                        <td class="text-end text-success" id="tot-monedas">$0.00</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <div class="card card-custom p-3 bg-success bg-opacity-10 border border-success mb-3">
+                        <h6 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-chart-column me-2"></i>Resumen General y Auditoría de Caja</h6>
+                        
+                        <table class="table table-sm table-bordered bg-white excel-table">
+                            <tbody>
+                                <tr>
+                                    <td><strong>VENTAS DEL DÍA</strong></td>
+                                    <td class="text-end fw-bold text-primary" id="corte-sales-display">$0.00</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>GASTOS DEL DÍA</strong></td>
+                                    <td class="text-end fw-bold text-danger" id="corte-expenses-display">$0.00</td>
+                                </tr>
+                                <tr class="table-success fw-bold">
+                                    <td>BALANCE OPERATIVO DEL DÍA (Ventas - Gastos)</td>
+                                    <td class="text-end" id="corte-balance-display">$0.00</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>DINERO APORTADO / FONDO</strong></td>
+                                    <td class="text-end">
+                                        <input type="number" step="0.50" id="corte-dinero-aportado" class="form-control form-control-sm text-end fw-bold" value="7602.00" oninput="recalculateCorte()">
+                                    </td>
+                                </tr>
+                                <tr class="table-warning">
+                                    <td><strong>DINERO PROPINAS (Módulo Propinas)</strong></td>
+                                    <td class="text-end fw-bold text-dark" id="corte-tips-display">$0.00</td>
+                                </tr>
+                                <tr class="table-primary fw-bold">
+                                    <td>DINERO QUE DEBERÍA HABER EN CAJA</td>
+                                    <td class="text-end fs-6" id="corte-should-have">$0.00</td>
+                                </tr>
+                                <tr class="table-dark text-white fw-bold">
+                                    <td>DINERO REAL QUE HAY (Efectivo Físico Conteado)</td>
+                                    <td class="text-end fs-5 text-warning" id="corte-actual-have">$0.00</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>UTILIDAD / PÉRDIDA NETO</strong></td>
+                                    <td class="text-end fw-bold fs-6" id="corte-profit-loss">$0.00</td>
+                                </tr>
+                                <tr class="table-secondary fw-bold fs-6">
+                                    <td>DIFERENCIA (Descuadre de Caja)</td>
+                                    <td class="text-end" id="corte-difference">$0.00</td>
+                                </tr>
+                                <tr class="table-info border-top border-2 border-primary fw-bold">
+                                    <td>ACUMULADO HISTÓRICO (Ventas - Gastos Totales)</td>
+                                    <td class="text-end text-primary" id="corte-hist-balance">$0.00</td>
+                                </tr>
+                                <tr class="table-warning fw-bold">
+                                    <td>AUDITORÍA DE CAJA (Estatus Desvío)</td>
+                                    <td class="text-end fs-6" id="corte-audit-status">-</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="card card-custom p-3 text-center">
+                        <button class="btn btn-danger btn-lg fw-bold w-100" onclick="closeCashRegister()">
+                            <i class="fa-solid fa-lock me-2"></i>Cerrar y Guardar Corte
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SECCIÓN: IMPORTACIÓN DE VENTAS HISTÓRICAS DESDE EXCEL -->
+        <div id="section-import" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4 class="fw-bold m-0"><i class="fa-solid fa-file-import me-2"></i>Importar Ventas Históricas desde Excel</h4>
+            </div>
+
+            <div class="card card-custom p-3 mb-3 border-start border-4 border-danger">
+                <h6 class="fw-bold mb-2">1. Selecciona el archivo</h6>
+                <p class="small text-muted mb-3">
+                    Sube un archivo Excel (.xlsx, .xls o .xlsm) que tenga una hoja con las columnas
+                    <strong>Ticket, Fecha, Hora, ESTATUS, Producto, TAMAÑO, SABORES, GUISADO 1-4, Cantidad, Importe, Tipo Servicio, Tipo de Pago</strong>
+                    (el mismo formato que la hoja "ACUMULADO VENTAS"). Las ventas se agregan como ventas retroactivas
+                    (quedan marcadas como históricas) y no afectan el folio de tus ventas del día a día.
+                    Puedes usar esta pantalla cada vez que tengas un nuevo archivo que importar (por ejemplo, el de 2024 y 2025).
+                </p>
+                <div class="d-flex align-items-center gap-2 flex-wrap">
+                    <button class="btn btn-outline-danger fw-bold" onclick="document.getElementById('import-file-input').click()">
+                        <i class="fa-solid fa-file-excel me-1"></i>Elegir Archivo Excel
+                    </button>
+                    <span id="import-filename-display" class="text-muted small">Ningún archivo seleccionado</span>
+                    <input type="file" id="import-file-input" accept=".xlsx,.xls,.xlsm" style="display:none" onchange="handleImportFileSelect(event)">
+                </div>
+            </div>
+
+            <div id="import-preview-container"></div>
+        </div>
+
+    </div>
+
+    <!-- MODALES -->
+
+    <!-- Modal Cobro -->
+    <div class="modal fade" id="checkoutModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title fw-bold"><i class="fa-solid fa-cash-register me-2"></i>Completar Cobro</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="text-center mb-3 p-2 bg-light rounded border">
+                        <span class="text-muted small d-block">TOTAL A COBRAR</span>
+                        <h2 class="fw-bold text-danger m-0" id="modal-checkout-total">$0.00</h2>
+                    </div>
+
+                    <div class="mb-3 p-2 border rounded bg-light">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="pay-backfill-toggle" onchange="toggleBackfillDate()">
+                            <label class="form-check-label small fw-bold" for="pay-backfill-toggle">
+                                <i class="fa-solid fa-clock-rotate-left me-1"></i>Venta de una fecha anterior (captura histórica)
+                            </label>
+                        </div>
+                        <div id="pay-backfill-date-wrap" style="display:none;" class="mt-2">
+                            <label class="form-label fw-bold small">Fecha real de la venta</label>
+                            <input type="date" class="form-control form-control-sm" id="pay-sale-date" min="2024-04-01">
+                            <small class="text-muted d-block mt-1">La venta se guardará con esta fecha en vez de la de hoy, y aparecerá marcada como "Histórica" en Reportes.</small>
+                        </div>
+                    </div>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label fw-bold small">Estatus</label>
+                            <select class="form-select form-select-sm" id="pay-status">
+                                <option value="PAGADO">PAGADO</option>
+                                <option value="PENDIENTE">PENDIENTE</option>
+                                <option value="CANCELADO">CANCELADO</option>
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-bold small">Tipo Servicio</label>
+                            <select class="form-select form-select-sm" id="pay-service">
+                                <option value="LOCAL">LOCAL</option>
+                                <option value="LLEVAR">LLEVAR</option>
+                                <option value="UBER">UBER</option>
+                                <option value="CORTESIA">CORTESIA</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <h6 class="fw-bold border-bottom pb-2">Formas de Pago</h6>
+                    <div class="mb-2">
+                        <label class="form-label small m-0 fw-bold"><i class="fa-solid fa-money-bill-wave me-1 text-success"></i>Efectivo:</label>
+                        <input type="number" step="0.50" id="pay-cash" class="form-control form-control-sm" placeholder="0.00" oninput="calculatePayments()">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small m-0 fw-bold"><i class="fa-solid fa-credit-card me-1 text-primary"></i>Tarjeta:</label>
+                        <input type="number" step="0.50" id="pay-card" class="form-control form-control-sm" placeholder="0.00" oninput="calculatePayments()">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label small m-0 fw-bold"><i class="fa-solid fa-building-columns me-1 text-warning"></i>Transferencia:</label>
+                        <input type="number" step="0.50" id="pay-transfer" class="form-control form-control-sm" placeholder="0.00" oninput="calculatePayments()">
+                    </div>
+
+                    <div class="p-2 border rounded bg-light">
+                        <div class="d-flex justify-content-between small">
+                            <span>Suma Pagada:</span>
+                            <span id="pay-sum-paid" class="fw-bold">$0.00</span>
+                        </div>
+                        <div class="d-flex justify-content-between small">
+                            <span>Monto Faltante:</span>
+                            <span id="pay-due" class="fw-bold text-danger">$0.00</span>
+                        </div>
+                        <div class="d-flex justify-content-between small border-top pt-1 mt-1">
+                            <span>Cambio (Efectivo):</span>
+                            <span id="pay-change" class="fw-bold text-success">$0.00</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-danger fw-bold" id="btn-finish-sale" onclick="finalizeCheckout()">Finalizar Venta</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Ticket con Opciones para WhatsApp y Correo -->
+    <div class="modal fade" id="ticketModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title fw-bold"><i class="fa-solid fa-receipt me-2"></i>Ticket Generado</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body bg-light">
+                    <!-- Ticket Impreso / Vista previa -->
+                    <div class="ticket-paper" id="printable-ticket">
+                        <div class="text-center mb-2">
+                            <img id="brand-logo-ticket" alt="Linaje del Sabor" style="width:55px; height:55px; object-fit:contain; margin-bottom:2px;">
+                            <h6 class="fw-bold m-0">Linaje del Sabor</h6>
+                            <small class="d-block" style="font-size:10px;">Sabor Tradicional y Casero</small>
+                            <small class="d-block text-muted" style="font-size:10px;">Folio: <span id="t-folio"></span></small>
+                            <small class="d-block text-muted" style="font-size:10px;"><span id="t-date"></span></small>
+                        </div>
+                        <div class="border-top border-bottom py-1 my-2" style="font-size:11px;">
+                            <div><strong>Servicio:</strong> <span id="t-service"></span></div>
+                            <div><strong>Pago:</strong> <span id="t-payment"></span></div>
+                            <div><strong>Estatus:</strong> <span id="t-status"></span></div>
+                        </div>
+                        <table class="w-100 my-2" style="font-size: 11px;">
+                            <thead>
+                                <tr class="border-bottom">
+                                    <th>Cant/Item</th>
+                                    <th class="text-end">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody id="t-items-body"></tbody>
+                        </table>
+                        <div class="border-top pt-2 mt-2" style="font-size:11px;">
+                            <div class="d-flex justify-content-between">
+                                <span>Subtotal:</span>
+                                <span id="t-subtotal">$0.00</span>
+                            </div>
+                            <div class="d-flex justify-content-between">
+                                <span>IVA (16%):</span>
+                                <span id="t-tax">$0.00</span>
+                            </div>
+                            <div class="d-flex justify-content-between fw-bold fs-6 my-1">
+                                <span>TOTAL:</span>
+                                <span id="t-total">$0.00</span>
+                            </div>
+                            <div class="d-flex justify-content-between text-muted" id="t-change-row">
+                                <span>Cambio Entregado:</span>
+                                <span id="t-change">$0.00</span>
+                            </div>
+                        </div>
+                        <div class="text-center mt-3 pt-2 border-top">
+                            <p class="fw-bold m-0" style="font-size:11px;">¡Gracias por su compra!</p>
+                            <small class="text-muted" style="font-size:10px;">Vuelve pronto</small>
+                        </div>
+                    </div>
+
+                    <!-- Campos opcionales para envío directo -->
+                    <div class="mt-3 p-2 bg-white rounded border">
+                        <label class="form-label fw-bold small mb-1"><i class="fa-solid fa-share-nodes me-1"></i>Opciones de Envío:</label>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <input type="tel" id="send-wa-number" class="form-control form-control-sm" placeholder="Tel. WhatsApp (10 dígs)">
+                            </div>
+                            <div class="col-6">
+                                <input type="email" id="send-email-address" class="form-control form-control-sm" placeholder="Correo electrónico">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer d-flex flex-wrap gap-2 justify-content-center">
+                    <button class="btn btn-outline-dark btn-sm" onclick="window.print()"><i class="fa-solid fa-print me-1"></i>Imprimir</button>
+                    <button class="btn btn-danger btn-sm" onclick="downloadPDF()"><i class="fa-solid fa-file-pdf me-1"></i>Descargar PDF</button>
+                    <button class="btn btn-success btn-sm fw-bold" onclick="sendWhatsApp()"><i class="fa-brands fa-whatsapp me-1"></i>Enviar WhatsApp</button>
+                    <button class="btn btn-primary btn-sm fw-bold" onclick="sendEmail()"><i class="fa-solid fa-envelope me-1"></i>Enviar Correo</button>
+                    <button class="btn btn-secondary btn-sm" onclick="sharePDFNative()" title="Compartir PDF vía menú del dispositivo"><i class="fa-solid fa-share-nodes me-1"></i>Compartir PDF</button>
+                    <div class="w-100 border-top my-1"></div>
+                    <button class="btn btn-outline-warning btn-sm fw-bold" onclick="cancelSaleFromTicket()"><i class="fa-solid fa-ban me-1"></i>Cancelar Venta</button>
+                    <button class="btn btn-outline-danger btn-sm fw-bold" onclick="deleteSaleFromTicket()"><i class="fa-solid fa-trash me-1"></i>Eliminar Venta</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Personalizar Producto -->
+    <div class="modal fade" id="productModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title fw-bold" id="modalProductTitle">Personalizar Producto</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="selectedProductId">
+
+                    <div class="mb-3" id="group-variant">
+                        <label class="form-label fw-bold"><i class="fa-solid fa-ruler-combined me-1"></i>Tamaño / Variante:</label>
+                        <select class="form-select" id="select-variant"></select>
+                    </div>
+
+                    <div class="mb-3" id="group-stew" style="display:none;">
+                        <label class="form-label fw-bold"><i class="fa-solid fa-bowl-rice me-1"></i>Selecciona Guisados (hasta 4):</label>
+                        <div class="row g-2">
+                            <div class="col-6 mb-2">
+                                <small class="text-muted d-block">Guisado 1</small>
+                                <select class="form-select form-select-sm stew-select" id="select-stew-1"></select>
+                            </div>
+                            <div class="col-6 mb-2">
+                                <small class="text-muted d-block">Guisado 2</small>
+                                <select class="form-select form-select-sm stew-select" id="select-stew-2"></select>
+                            </div>
+                            <div class="col-6 mb-2">
+                                <small class="text-muted d-block">Guisado 3</small>
+                                <select class="form-select form-select-sm stew-select" id="select-stew-3"></select>
+                            </div>
+                            <div class="col-6 mb-2">
+                                <small class="text-muted d-block">Guisado 4</small>
+                                <select class="form-select form-select-sm stew-select" id="select-stew-4"></select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3" id="group-flavor" style="display:none;">
+                        <label class="form-label fw-bold"><i class="fa-solid fa-glass-water me-1"></i>Sabor:</label>
+                        <select class="form-select" id="select-flavor"></select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-danger fw-bold" onclick="confirmAddToCart()">
+                        <i class="fa-solid fa-cart-plus me-1"></i>Agregar a la Orden
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal CRUD Producto -->
+    <div class="modal fade" id="crudProductModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title fw-bold" id="crudProductTitle">Alta / Edición de Producto</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="formProduct">
+                        <input type="hidden" id="crud-prod-id">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Nombre del Producto</label>
+                                <input type="text" class="form-control" id="crud-prod-name" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Categoría</label>
+                                <select class="form-select" id="crud-prod-category" required></select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label fw-bold">Icono FontAwesome</label>
+                                <input type="text" class="form-control" id="crud-prod-icon" value="fa-utensils">
+                            </div>
+                            <div class="col-md-3 pt-4">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="crud-prod-stew">
+                                    <label class="form-check-label fw-bold" for="crud-prod-stew">¿Guisado?</label>
+                                </div>
+                            </div>
+                            <div class="col-md-3 pt-4">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="crud-prod-flavor">
+                                    <label class="form-check-label fw-bold" for="crud-prod-flavor">¿Sabor?</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <hr>
+                        <h6 class="fw-bold mb-3">Variantes y Precios</h6>
+                        <div id="variants-container" class="mb-3"></div>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" onclick="addVariantRow()">
+                            <i class="fa-solid fa-plus me-1"></i>Agregar Variante
+                        </button>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-danger fw-bold" onclick="saveProduct()">Guardar Producto</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Alta / Edición de Gasto -->
+    <div class="modal fade" id="expenseModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title fw-bold" id="expenseModalTitle"><i class="fa-solid fa-wallet me-2"></i>Gestión de Gasto</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="formExpense" onsubmit="saveExpense(event)">
+                        <input type="hidden" id="exp-id">
+                        <div class="mb-2">
+                            <label class="form-label fw-bold small">Fecha:</label>
+                            <input type="date" id="exp-date" class="form-control form-control-sm" required>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label fw-bold small">Concepto:</label>
+                            <input type="text" id="exp-concept" class="form-control form-control-sm" placeholder="Ej. Compra de Verdura" required>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label fw-bold small">Categoría:</label>
+                            <select id="exp-category" class="form-select form-select-sm">
+                                <option value="Insumos">Insumos / Materia Prima</option>
+                                <option value="Servicios">Servicios (Luz, Agua, Gas)</option>
+                                <option value="Sueldos">Sueldos / Pagos</option>
+                                <option value="Otros">Otros Gastos</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label fw-bold small">Monto ($):</label>
+                            <input type="number" step="0.50" id="exp-amount" class="form-control form-control-sm" placeholder="0.00" required>
+                        </div>
+                        <div class="modal-footer px-0 pb-0">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                            <button type="submit" class="btn btn-danger fw-bold">Guardar Gasto</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmación Genérico (Cancelar / Eliminar Venta, etc.) -->
+    <div class="modal fade" id="confirmActionModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header" id="confirmActionHeader">
+                    <h5 class="modal-title fw-bold" id="confirmActionTitle"><i class="fa-solid fa-triangle-exclamation me-2"></i>Confirmar Acción</h5>
+                    <button type="button" class="btn-close" id="confirmActionCloseBtn" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p id="confirmActionMessage" class="mb-3"></p>
+                    <div id="confirmActionTypeWrap" style="display:none;">
+                        <label class="form-label small fw-bold">Escribe <code id="confirmActionTypeWord"></code> para confirmar:</label>
+                        <input type="text" id="confirmActionTypeInput" class="form-control" autocomplete="off">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn fw-bold" id="confirmActionBtn" onclick="executeConfirmedAction()">Confirmar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS Bundle -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+        // ESTADO GLOBAL DE DATOS
+        let catalogData = {
+            categories: [
+                { id: "all", name: "Todos los Productos", icon: "fa-border-all" },
+                { id: "bebidas", name: "Bebidas", icon: "fa-glass-water" },
+                { id: "burritos", name: "Burritos", icon: "fa-scroll" },
+                { id: "gorditas", name: "Gorditas", icon: "fa-circle-dot" },
+                { id: "otros", name: "Otros", icon: "fa-cubes" },
+                { id: "platos", name: "Platos de Guisado", icon: "fa-plate-wheat" },
+                { id: "quesadillas", name: "Quesadillas", icon: "fa-utensils" },
+                { id: "tacos", name: "Tacos", icon: "fa-bread-slice" },
+                { id: "tortillas", name: "Tortillas", icon: "fa-stroopwafel" },
+                { id: "volcanes", name: "Volcanes", icon: "fa-volcano" }
+            ],
+            stews: [
+                "BISTEC EN PASILLA", "CARNE DE PUERCO", "CHAMPIÑONES", "CHORIZO",
+                "DESHEBRADA", "DURO EN SALSA VERDE", "FRIJOLES", "HUEVO",
+                "MOLE CON POLLO", "NOPALES", "PAPAS", "PICADILLO", "PRENSADO", "RAJAS CON CREMA"
+            ],
+            flavors: [
+                "AMERICANO", "DE OLLA", "HORCHATA", "JAMAICA", "NATURAL", "NORMAL", "SIN AZUCAR", "TAMARINDO"
+            ],
+            sizes: [
+                "300 ML", "330 ML", "600 ML", "LITRO", "MEDIO LITRO", "ESTÁNDAR"
+            ],
+            products: [
+                { id: 101, name: "AGUAS FRESCAS LITRO", category: "bebidas", icon: "fa-bottle-water", requiresStew: false, requiresFlavor: true, variants: [{ size: "LITRO", price: 35.00 }] },
+                { id: 102, name: "AGUAS FRESCAS MEDIO LITRO", category: "bebidas", icon: "fa-glass-water", requiresStew: false, requiresFlavor: true, variants: [{ size: "MEDIO LITRO", price: 20.00 }] },
+                { id: 103, name: "BURRITO", category: "burritos", icon: "fa-scroll", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 35.00 }] },
+                { id: 104, name: "CAFÉ", category: "bebidas", icon: "fa-mug-hot", requiresStew: false, requiresFlavor: true, variants: [{ size: "300 ML", price: 20.00 }] },
+                { id: 105, name: "CAFÉ REFIL", category: "bebidas", icon: "fa-mug-saucer", requiresStew: false, requiresFlavor: true, variants: [{ size: "ESTÁNDAR", price: 30.00 }] },
+                { id: 106, name: "CHALUPITA", category: "otros", icon: "fa-bowl-rice", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 18.00 }] },
+                { id: 107, name: "CIEL AGUA NATURAL", category: "bebidas", icon: "fa-bottle-water", requiresStew: false, requiresFlavor: false, variants: [{ size: "600 ML", price: 15.00 }] },
+                { id: 108, name: "GORDITA", category: "gorditas", icon: "fa-circle-dot", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 22.00 }] },
+                { id: 109, name: "GORDITA C/QUESO", category: "gorditas", icon: "fa-cheese", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 27.00 }] },
+                { id: 110, name: "GORDITA FRITA", category: "gorditas", icon: "fa-fire", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 24.00 }] },
+                { id: 111, name: "OTROS", category: "otros", icon: "fa-ellipsis", requiresStew: false, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 10.00 }] },
+                { id: 112, name: "PLATO 1 GUISADO", category: "platos", icon: "fa-utensils", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 65.00 }] },
+                { id: 113, name: "PLATO 2 GUISADOS", category: "platos", icon: "fa-utensils", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 80.00 }] },
+                { id: 114, name: "PLATO 3 GUISADOS", category: "platos", icon: "fa-utensils", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 95.00 }] },
+                { id: 115, name: "PLATO GUISADO PEQUEÑO", category: "platos", icon: "fa-bowl-food", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 45.00 }] },
+                { id: 116, name: "QUESADILLA FRITA", category: "quesadillas", icon: "fa-fire", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 25.00 }] },
+                { id: 117, name: "QUESADILLAS COMAL", category: "quesadillas", icon: "fa-utensils", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 25.00 }] },
+                { id: 118, name: "QUESADILLAS COMAL DOBLE", category: "quesadillas", icon: "fa-layer-group", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 45.00 }] },
+                { id: 119, name: "REFRESCOS CHICOS", category: "bebidas", icon: "fa-wine-bottle", requiresStew: false, requiresFlavor: true, variants: [{ size: "330 ML", price: 20.00 }] },
+                { id: 120, name: "REFRESCOS GRANDES", category: "bebidas", icon: "fa-wine-bottle", requiresStew: false, requiresFlavor: true, variants: [{ size: "600 ML", price: 28.00 }] },
+                { id: 121, name: "TACO", category: "tacos", icon: "fa-bread-slice", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 18.00 }] },
+                { id: 122, name: "TACO DOBLE", category: "tacos", icon: "fa-layer-group", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 32.00 }] },
+                { id: 123, name: "TORTILLA", category: "tortillas", icon: "fa-stroopwafel", requiresStew: false, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 5.00 }] },
+                { id: 124, name: "VASO DESHECHABLE", category: "otros", icon: "fa-box", requiresStew: false, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 3.00 }] },
+                { id: 125, name: "VOLCAN", category: "volcanes", icon: "fa-volcano", requiresStew: true, requiresFlavor: false, variants: [{ size: "ESTÁNDAR", price: 28.00 }] }
+            ]
+        };
+
+        let selectedCategoryFilter = "all";
+        let currentCart = [];
+        let salesHistory = [];
+        let expensesList = [];
+        let tipsHistory = [];
+        let colaboradoresList = [];
+
+        let currentCheckoutTotal = 0;
+        let activeTicketSale = null;
+
+        let currentFolioNumber = 0;
+        const STORAGE_KEY = 'linaje_sabor_pos_data';
+        const LOGO_DATA_URI = "data:image/png;base64,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
