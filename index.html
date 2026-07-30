@@ -60,62 +60,6 @@
             padding: 25px;
         }
 
-        /* --- Sidebar colapsable en pantallas de tablet/iPad (hasta 991px de ancho) ---
-           El sidebar fijo de 250px se veía bien en monitor de escritorio, pero en un iPad
-           (768px en vertical, 1024px en horizontal) se comía demasiado espacio útil.
-           Aquí se oculta fuera de la pantalla por default y se desliza al tocar el botón
-           de menú; en pantallas grandes (escritorio) todo se comporta exactamente igual
-           que antes. */
-        .mobile-sidebar-toggle { display: none; }
-        .sidebar-overlay { display: none; }
-
-        @media (max-width: 991.98px) {
-            .sidebar {
-                transform: translateX(-100%);
-                transition: transform 0.25s ease-in-out;
-                width: 260px;
-            }
-            .sidebar.mobile-open {
-                transform: translateX(0);
-            }
-            .main-content {
-                margin-left: 0;
-                padding: 15px;
-                padding-top: 65px; /* deja espacio para el botón de menú fijo arriba */
-            }
-            .mobile-sidebar-toggle {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                position: fixed;
-                top: 12px;
-                left: 12px;
-                width: 44px;
-                height: 44px;
-                border-radius: 10px;
-                background-color: var(--primary-color);
-                color: white;
-                border: none;
-                z-index: 200;
-                font-size: 1.2rem;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-            }
-            .sidebar-overlay {
-                display: none;
-                position: fixed;
-                inset: 0;
-                background: rgba(0,0,0,0.4);
-                z-index: 99;
-            }
-            .sidebar-overlay.active {
-                display: block;
-            }
-            /* Botones y controles un poco más grandes para dedo en vez de mouse */
-            .btn, .form-select, .form-control {
-                min-height: 40px;
-            }
-        }
-
         .card-custom {
             border: none;
             border-radius: 12px;
@@ -205,12 +149,6 @@
     </style>
 </head>
 <body>
-
-    <!-- Botón de menú y overlay, visibles solo en pantallas de tablet/celular (ver CSS @media arriba) -->
-    <button type="button" class="mobile-sidebar-toggle" onclick="toggleMobileSidebar()" aria-label="Abrir menú">
-        <i class="fa-solid fa-bars"></i>
-    </button>
-    <div class="sidebar-overlay" onclick="closeMobileSidebar()"></div>
 
     <!-- Navegación Lateral -->
     <div class="sidebar d-flex flex-column justify-content-between">
@@ -1444,6 +1382,7 @@
 
         let currentCheckoutTotal = 0;
         let activeTicketSale = null;
+        let cachedTicketPDFFile = null; // PDF pre-generado del ticket activo, para que "Compartir PDF" no dependa de un await lento
 
         let currentFolioNumber = 0;
         const STORAGE_KEY = 'linaje_sabor_pos_data';
@@ -1646,18 +1585,6 @@
             if (typeof action === 'function') action();
         }
 
-        // Muestra/oculta el sidebar en pantallas de tablet/celular (ver breakpoint 991.98px en el CSS).
-        // En pantallas de escritorio estas funciones no tienen efecto visible porque el sidebar
-        // siempre está fijo y visible ahí.
-        function toggleMobileSidebar() {
-            document.querySelector('.sidebar').classList.toggle('mobile-open');
-            document.querySelector('.sidebar-overlay').classList.toggle('active');
-        }
-        function closeMobileSidebar() {
-            document.querySelector('.sidebar').classList.remove('mobile-open');
-            document.querySelector('.sidebar-overlay').classList.remove('active');
-        }
-
         function showSection(sectionId) {
             const sections = ['pos', 'catalog', 'dashboard', 'reports', 'expenses', 'tips', 'corte', 'import'];
             sections.forEach(s => {
@@ -1668,9 +1595,6 @@
             document.querySelectorAll('.sidebar .nav-link').forEach(btn => btn.classList.remove('active'));
             const activeBtn = document.getElementById(`btn-${sectionId}`);
             if (activeBtn) activeBtn.classList.add('active');
-
-            closeMobileSidebar(); // en tablet/celular, navegar cierra el menú de una vez para dejar ver el contenido,
-                                   // independientemente de si el renderizado de la sección de abajo tiene éxito o no
 
             if (sectionId === 'catalog') renderCatalogTables();
             if (sectionId === 'dashboard') updateDashboardMetrics();
@@ -1980,6 +1904,7 @@
 
         function displayTicket(sale) {
             activeTicketSale = sale;
+            cachedTicketPDFFile = null;
             document.getElementById('t-folio').innerText = sale.id;
             document.getElementById('t-date').innerText = sale.date;
             document.getElementById('t-service').innerText = sale.service;
@@ -2003,6 +1928,11 @@
             document.getElementById('t-change').innerText = `${formatMoney((sale.change || 0))}`;
 
             ticketModalInstance.show();
+
+            // Pre-generar el PDF en segundo plano mientras el usuario revisa el ticket, para que
+            // al tocar "Compartir PDF" ya esté listo y navigator.share() se dispare de inmediato
+            // dentro del gesto de toque (Safari/iPadOS cancela el share si tarda demasiado en llegar).
+            getTicketPDFBlob().then(file => { cachedTicketPDFFile = file; }).catch(err => console.error(err));
         }
 
         function cancelSaleFromTicket() {
@@ -2086,7 +2016,9 @@
         async function sharePDFNative() {
             if (!activeTicketSale) return;
             try {
-                const pdfFile = await getTicketPDFBlob();
+                // Usamos el PDF pre-generado si ya está listo; si no, lo generamos al vuelo (menos
+                // confiable en Safari/iPadOS porque puede perder el "gesto de usuario" en el await).
+                const pdfFile = cachedTicketPDFFile || await getTicketPDFBlob();
                 if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
                     await navigator.share({
                         title: `Ticket ${activeTicketSale.id}`,
@@ -2097,7 +2029,10 @@
                     downloadPDF();
                 }
             } catch (err) {
-                if (err.name !== 'AbortError') console.error(err);
+                if (err.name !== 'AbortError') {
+                    console.error(err);
+                    showToast('No se pudo abrir el menú de compartir. Intenta con "Descargar PDF".', 'warning');
+                }
             }
         }
 
@@ -2587,7 +2522,8 @@
             } catch (err) {
                 console.error('Error al guardar en almacenamiento local:', err);
                 updateStorageIndicator(false);
-                showToast('No se pudo guardar el cambio localmente (almacenamiento lleno o no disponible en este navegador).', 'warning');
+                const detalle = err && err.name ? err.name : 'desconocido';
+                showToast(`No se pudo guardar el cambio localmente (detalle: ${detalle}).`, 'warning');
             }
         }
 
@@ -2829,6 +2765,30 @@
         }
 
         // --- MÓDULO DASHBOARD ANALÍTICO COMPLETO ---
+
+        // Devuelve true si dateStr (formato "YYYY-MM-DD") cae dentro de la semana de negocio
+        // ACTUAL, definida como miércoles a domingo (en vez de una ventana rodante de 7 días).
+        // Usa fecha LOCAL del dispositivo (no UTC) para evitar desfases de zona horaria.
+        function isDateInCurrentBusinessWeek(dateStr) {
+            if (!dateStr) return false;
+            const pad = n => String(n).padStart(2, '0');
+            const toLocalStr = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const dow = today.getDay(); // 0=Dom,1=Lun,2=Mar,3=Mié,4=Jue,5=Vie,6=Sáb
+            const diffToWednesday = (dow - 3 + 7) % 7; // días transcurridos desde el miércoles de esta semana
+
+            const weekStart = new Date(today);
+            weekStart.setDate(today.getDate() - diffToWednesday);
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekStart.getDate() + 4); // miércoles + 4 días = domingo
+
+            const startStr = toLocalStr(weekStart);
+            const endStr = toLocalStr(weekEnd);
+            return dateStr >= startStr && dateStr <= endStr;
+        }
+
         function updateDashboardMetrics() {
             const validSales = salesHistory.filter(s => s.status !== 'CANCELADO');
             const todayStr = new Date().toISOString().split('T')[0];
@@ -2847,14 +2807,8 @@
             const sumDay = daySales.reduce((a, b) => a + b.total, 0);
             const avgDay = daySales.length > 0 ? sumDay / daySales.length : 0;
 
-            // Semana actual (últimos 7 días o semana ISO)
-            const now = new Date();
-            const weekSales = validSales.filter(s => {
-                const d = new Date(s.rawDate);
-                const diffTime = Math.abs(now - d);
-                const diffDays = diffTime / (1000 * 60 * 60 * 24);
-                return diffDays <= 7;
-            });
+            // Semana de negocio actual (miércoles a domingo)
+            const weekSales = validSales.filter(s => isDateInCurrentBusinessWeek(s.rawDate));
             const sumWeek = weekSales.reduce((a, b) => a + b.total, 0);
             const avgWeek = weekSales.length > 0 ? sumWeek / weekSales.length : 0;
 
@@ -3274,10 +3228,7 @@
             let filtered = validSales.filter(s => {
                 if (!s.rawDate) return false;
                 if (period === 'day') return s.rawDate === todayStr;
-                if (period === 'week') {
-                    const diff = Math.abs(new Date() - new Date(s.rawDate)) / (1000 * 60 * 60 * 24);
-                    return diff <= 7;
-                }
+                if (period === 'week') return isDateInCurrentBusinessWeek(s.rawDate);
                 if (period === 'month') return s.rawDate.startsWith(todayStr.substring(0, 7));
                 if (period === 'year') return s.rawDate.startsWith(todayStr.substring(0, 4));
                 return true;
@@ -3312,10 +3263,7 @@
             let filtered = validSales.filter(s => {
                 if (!s.rawDate) return false;
                 if (period === 'day') return s.rawDate === todayStr;
-                if (period === 'week') {
-                    const diff = Math.abs(new Date() - new Date(s.rawDate)) / (1000 * 60 * 60 * 24);
-                    return diff <= 7;
-                }
+                if (period === 'week') return isDateInCurrentBusinessWeek(s.rawDate);
                 if (period === 'month') return s.rawDate.startsWith(todayStr.substring(0, 7));
                 if (period === 'year') return s.rawDate.startsWith(todayStr.substring(0, 4));
                 return true;
