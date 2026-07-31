@@ -1386,6 +1386,9 @@
 
         let currentCheckoutTotal = 0;
         let activeTicketSale = null;
+        let cachedTicketPDFFile = null; // Solo para "Compartir PDF": tenerlo listo de antemano evita
+                                         // perder el permiso del toque en navegadores como Safari,
+                                         // que exigen llamar a navigator.share() sin demoras async.
         let ticketModalFullyShown = false;
 
         let currentFolioNumber = 0;
@@ -2015,10 +2018,15 @@
             document.getElementById('t-change').innerText = `${formatMoney((sale.change || 0))}`;
 
             ticketModalInstance.show();
-            // Ya NO se pre-genera el PDF en automático al mostrar el ticket: hacerlo en cada
-            // venta (se haya pedido el PDF o no) iba acumulando trabajo pesado de captura en la
-            // misma sesión del navegador y degradaba las siguientes generaciones. Ahora el PDF
-            // solo se genera cuando el usuario realmente toca Descargar/Compartir/Imprimir.
+            cachedTicketPDFFile = null;
+            // Se pre-genera el PDF en segundo plano SOLO para que "Compartir" lo tenga listo
+            // (evita perder el permiso del toque en Safari). Ya no se usa para Descargar/Imprimir,
+            // que generan al momento — antes esto se sospechaba culpable de ir degradando las
+            // siguientes generaciones, pero la causa real era un bug de la versión de la librería
+            // html2pdf.js (ya corregido usando la v0.9.3), así que pre-generar vuelve a ser seguro.
+            document.getElementById('ticketModal').addEventListener('shown.bs.modal', () => {
+                getTicketPDFBlob().then(file => { cachedTicketPDFFile = file; }).catch(err => console.error(err));
+            }, { once: true });
         }
 
         function cancelSaleFromTicket() {
@@ -2192,7 +2200,7 @@
             try {
                 // Usamos el PDF pre-generado si ya está listo; si no, lo generamos al vuelo (menos
                 // confiable en Safari/iPadOS porque puede perder el "gesto de usuario" en el await).
-                const pdfFile = await getTicketPDFBlob();
+                const pdfFile = cachedTicketPDFFile || await getTicketPDFBlob();
                 if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
                     await navigator.share({
                         title: `Ticket ${activeTicketSale.id}`,
