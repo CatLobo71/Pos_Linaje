@@ -113,17 +113,18 @@
         }
 
         @media print {
-            body * { visibility: hidden; }
-            #printable-ticket, #printable-ticket * { visibility: visible; }
-            #printable-ticket { 
+            /* #print-area es hijo directo de body (fuera del modal), así que ocultar todo lo
+               demás con display:none no deja ningún ancestro oculto que lo bloquee, y tampoco
+               deja espacio "fantasma" de contenido escondido que genere páginas en blanco.
+               El ancho/tipografía reales los aporta la clase .ticket-paper del clon dentro. */
+            body * { display: none !important; }
+            #print-area, #print-area * { display: revert !important; }
+            #print-area { 
+                display: block !important;
                 position: absolute; 
                 left: 0; 
                 top: 0; 
-                width: 80mm; 
                 margin: 0; 
-                padding: 5px; 
-                border: none; 
-                box-shadow: none; 
             }
         }
 
@@ -1130,7 +1131,7 @@
                     </div>
                 </div>
                 <div class="modal-footer d-flex flex-wrap gap-2 justify-content-center">
-                    <button class="btn btn-outline-dark btn-sm" onclick="window.print()"><i class="fa-solid fa-print me-1"></i>Imprimir</button>
+                    <button class="btn btn-outline-dark btn-sm" onclick="printTicket()"><i class="fa-solid fa-print me-1"></i>Imprimir</button>
                     <button class="btn btn-danger btn-sm" onclick="downloadPDF()"><i class="fa-solid fa-file-pdf me-1"></i>Descargar PDF</button>
                     <button class="btn btn-success btn-sm fw-bold" onclick="sendWhatsApp()"><i class="fa-brands fa-whatsapp me-1"></i>Enviar WhatsApp</button>
                     <button class="btn btn-primary btn-sm fw-bold" onclick="sendEmail()"><i class="fa-solid fa-envelope me-1"></i>Enviar Correo</button>
@@ -1450,7 +1451,7 @@
             expenseModalInstance = new bootstrap.Modal(document.getElementById('expenseModal'));
             confirmActionModalInstance = new bootstrap.Modal(document.getElementById('confirmActionModal'));
 
-            const todayStr = new Date().toISOString().split('T')[0];
+            const todayStr = getLocalDateStr();
             document.getElementById('tip-date').value = todayStr;
             document.getElementById('exp-date').value = todayStr;
 
@@ -1797,7 +1798,7 @@
             document.getElementById('pay-backfill-toggle').checked = false;
             document.getElementById('pay-backfill-date-wrap').style.display = 'none';
             const dateInput = document.getElementById('pay-sale-date');
-            dateInput.max = new Date().toISOString().split('T')[0];
+            dateInput.max = getLocalDateStr();
             dateInput.value = '';
 
             calculatePayments();
@@ -1811,7 +1812,7 @@
             wrap.style.display = checked ? 'block' : 'none';
             if (checked) {
                 const dateInput = document.getElementById('pay-sale-date');
-                if (!dateInput.value) dateInput.value = new Date().toISOString().split('T')[0];
+                if (!dateInput.value) dateInput.value = getLocalDateStr();
             }
         }
 
@@ -1855,7 +1856,7 @@
 
             const isBackfill = document.getElementById('pay-backfill-toggle').checked;
             const backfillDateStr = document.getElementById('pay-sale-date').value;
-            const todayStr = new Date().toISOString().split('T')[0];
+            const todayStr = getLocalDateStr();
 
             let rawDate, displayDate;
             if (isBackfill && backfillDateStr) {
@@ -1870,7 +1871,7 @@
                 return;
             } else {
                 const now = new Date();
-                rawDate = now.toISOString().split('T')[0];
+                rawDate = getLocalDateStr(now);
                 displayDate = now.toLocaleString();
             }
 
@@ -1929,10 +1930,12 @@
 
             ticketModalInstance.show();
 
-            // Pre-generar el PDF en segundo plano mientras el usuario revisa el ticket, para que
-            // al tocar "Compartir PDF" ya esté listo y navigator.share() se dispare de inmediato
-            // dentro del gesto de toque (Safari/iPadOS cancela el share si tarda demasiado en llegar).
-            getTicketPDFBlob().then(file => { cachedTicketPDFFile = file; }).catch(err => console.error(err));
+            // Pre-generar el PDF en segundo plano, pero solo hasta que el modal ya esté
+            // COMPLETAMENTE visible ('shown.bs.modal'). Generarlo justo al llamar show() (antes)
+            // capturaba el alto del ticket a medio abrir la animación, dando un PDF casi vacío.
+            document.getElementById('ticketModal').addEventListener('shown.bs.modal', () => {
+                getTicketPDFBlob().then(file => { cachedTicketPDFFile = file; }).catch(err => console.error(err));
+            }, { once: true });
         }
 
         function cancelSaleFromTicket() {
@@ -1950,28 +1953,55 @@
         }
 
         // --- ENVIAR TICKET Y DESCARGAR PDF ---
+        async function printTicket() {
+            if (!activeTicketSale) return;
+            try {
+                // Usamos el MISMO PDF que ya funciona bien en "Descargar" y "Compartir", en vez
+                // de intentar imprimir la página en vivo con CSS (@media print), que resultó
+                // poco confiable según el navegador. El PDF pre-generado ya está listo casi
+                // siempre, así que window.open() se dispara de inmediato dentro del clic.
+                const pdfFile = cachedTicketPDFFile || await getTicketPDFBlob();
+                const blobUrl = URL.createObjectURL(pdfFile);
+                const printWindow = window.open(blobUrl, '_blank');
+                if (!printWindow) {
+                    showToast('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes o usa "Descargar PDF".', 'warning');
+                    return;
+                }
+                printWindow.addEventListener('load', () => {
+                    try { printWindow.focus(); printWindow.print(); } catch (e) { /* el usuario puede imprimir desde el visor de PDF que se abrió */ }
+                });
+            } catch (err) {
+                console.error(err);
+                showToast('No se pudo preparar la impresión. Intenta con "Descargar PDF".', 'warning');
+            }
+        }
+
+        // Calcula las opciones del PDF con una altura de página DINÁMICA según el alto real
+        // del ticket (como un rollo de impresora térmica), en vez de una altura fija —
+        // así una venta con muchos productos no se corta en 2 hojas.
+        function buildTicketPdfOptions(element, filename) {
+            const marginIn = 0.1;
+            const widthIn = 3.2;
+            const heightIn = (element.scrollHeight / 96) + (marginIn * 2) + 0.15; // 96px ≈ 1 pulgada, + colchón
+            return {
+                margin: marginIn,
+                filename: filename,
+                image: { type: 'jpeg', quality: 0.9 },
+                html2canvas: { scale: 1.5 }, // suficiente nitidez para texto/líneas; reduce bastante el tamaño del archivo
+                jsPDF: { unit: 'in', format: [widthIn, heightIn], orientation: 'portrait' }
+            };
+        }
+
         function downloadPDF() {
             if (!activeTicketSale) return;
             const element = document.getElementById('printable-ticket');
-            const opt = {
-                margin:       0.1,
-                filename:     `Ticket_${activeTicketSale.id}.pdf`,
-                image:        { type: 'jpeg', quality: 0.98 },
-                html2canvas:  { scale: 2 },
-                jsPDF:        { unit: 'in', format: [3.2, 5.5], orientation: 'portrait' }
-            };
+            const opt = buildTicketPdfOptions(element, `Ticket_${activeTicketSale.id}.pdf`);
             html2pdf().set(opt).from(element).save();
         }
 
         async function getTicketPDFBlob() {
             const element = document.getElementById('printable-ticket');
-            const opt = {
-                margin:       0.1,
-                filename:     `Ticket_${activeTicketSale.id}.pdf`,
-                image:        { type: 'jpeg', quality: 0.98 },
-                html2canvas:  { scale: 2 },
-                jsPDF:        { unit: 'in', format: [3.2, 5.5], orientation: 'portrait' }
-            };
+            const opt = buildTicketPdfOptions(element, `Ticket_${activeTicketSale.id}.pdf`);
             const pdfWorker = html2pdf().set(opt).from(element).toPdf();
             const blob = await pdfWorker.output('blob');
             return new File([blob], `Ticket_${activeTicketSale.id}.pdf`, { type: 'application/pdf' });
@@ -2031,7 +2061,8 @@
             } catch (err) {
                 if (err.name !== 'AbortError') {
                     console.error(err);
-                    showToast('No se pudo abrir el menú de compartir. Intenta con "Descargar PDF".', 'warning');
+                    const detalle = err && err.name ? err.name : 'desconocido';
+                    showToast(`No se pudo abrir el menú de compartir (detalle: ${detalle}). Intenta con "Descargar PDF".`, 'warning');
                 }
             }
         }
@@ -2539,7 +2570,7 @@
             const blob = new Blob([JSON.stringify(buildStateSnapshot(), null, 2)], { type: 'application/json' });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            link.download = `Respaldo_LinajeDelSabor_${new Date().toISOString().split('T')[0]}.json`;
+            link.download = `Respaldo_LinajeDelSabor_${getLocalDateStr()}.json`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -2764,6 +2795,14 @@
             saveData();
         }
 
+        // Fecha de HOY en formato "YYYY-MM-DD" usando hora LOCAL del dispositivo (no UTC).
+        // new Date().toISOString() usa UTC, lo que en México (UTC-6) hace que el "día" cambie
+        // a las 6:00 p.m. hora local en vez de medianoche. Esta función evita ese desfase.
+        function getLocalDateStr(d = new Date()) {
+            const pad = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        }
+
         // --- MÓDULO DASHBOARD ANALÍTICO COMPLETO ---
 
         // Devuelve true si dateStr (formato "YYYY-MM-DD") cae dentro de la semana de negocio
@@ -2791,7 +2830,7 @@
 
         function updateDashboardMetrics() {
             const validSales = salesHistory.filter(s => s.status !== 'CANCELADO');
-            const todayStr = new Date().toISOString().split('T')[0];
+            const todayStr = getLocalDateStr();
             const currentYear = new Date().getFullYear();
 
             // Poblar selector de años
@@ -2907,7 +2946,7 @@
 
         function updateDashboardCharts() {
             const validSales = salesHistory.filter(s => s.status !== 'CANCELADO');
-            const todayStr = new Date().toISOString().split('T')[0];
+            const todayStr = getLocalDateStr();
             const currentMonthPrefix = todayStr.substring(0, 7);
 
             // 1. Ventas del mes por días
@@ -3223,7 +3262,7 @@
         function updateProductBreakdown() {
             const period = document.getElementById('breakdown-prod-period').value;
             const validSales = salesHistory.filter(s => s.status !== 'CANCELADO');
-            const todayStr = new Date().toISOString().split('T')[0];
+            const todayStr = getLocalDateStr();
 
             let filtered = validSales.filter(s => {
                 if (!s.rawDate) return false;
@@ -3258,7 +3297,7 @@
         function updateStewBreakdown() {
             const period = document.getElementById('breakdown-stew-period').value;
             const validSales = salesHistory.filter(s => s.status !== 'CANCELADO');
-            const todayStr = new Date().toISOString().split('T')[0];
+            const todayStr = getLocalDateStr();
 
             let filtered = validSales.filter(s => {
                 if (!s.rawDate) return false;
@@ -3298,7 +3337,7 @@
         function openExpenseModal() {
             document.getElementById('formExpense').reset();
             document.getElementById('exp-id').value = '';
-            document.getElementById('exp-date').value = new Date().toISOString().split('T')[0];
+            document.getElementById('exp-date').value = getLocalDateStr();
             document.getElementById('expenseModalTitle').innerText = 'Nuevo Gasto';
             expenseModalInstance.show();
         }
@@ -3558,7 +3597,7 @@
 
     let link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `Data_Rendimiento_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute("download", `Data_Rendimiento_${getLocalDateStr()}.csv`);
     
     document.body.appendChild(link);
     link.click();
@@ -3691,7 +3730,7 @@
         }
 
         function recalculateCorte() {
-            const todayStr = new Date().toISOString().split('T')[0];
+            const todayStr = getLocalDateStr();
 
             const todaySalesList = salesHistory.filter(s => s.status !== 'CANCELADO' && s.rawDate === todayStr);
             const totalSalesToday = todaySalesList.reduce((sum, s) => sum + s.total, 0);
@@ -3803,5 +3842,9 @@
             document.body.removeChild(link); // Limpia el DOM
         }
     </script>
+    <!-- Contenedor dedicado para impresión: se llena con una copia del ticket justo antes de
+         imprimir, y vive fuera del modal para que el CSS de impresión no dependa de sus
+         contenedores (evita tanto páginas en blanco como que el ticket no se muestre). -->
+    <div id="print-area" style="display:none;"></div>
 </body>
 </html>
