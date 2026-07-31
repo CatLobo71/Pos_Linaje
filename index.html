@@ -1403,6 +1403,59 @@
         let chartYearWeeksInstance, chartYearDaysInstance, chartWeekComparisonInstance;
         let pendingConfirmAction = null;
 
+        // ---- Capa de almacenamiento: IndexedDB, con reserva a localStorage si no está disponible ----
+        // IndexedDB tiene un límite de tamaño mucho mayor que localStorage (que en Safari ronda
+        // apenas ~5 MB) — esto es lo que resuelve de raíz el error "QuotaExceededError" conforme
+        // crece el histórico de ventas.
+        const IDB_NAME = 'linaje_sabor_db';
+        const IDB_STORE = 'kv';
+        let idbInstance = null;
+        let idbAvailable = false;
+
+        function openIndexedDB() {
+            return new Promise((resolve, reject) => {
+                if (!window.indexedDB) { reject(new Error('IndexedDB no disponible en este navegador')); return; }
+                const request = indexedDB.open(IDB_NAME, 1);
+                request.onupgradeneeded = (event) => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE);
+                };
+                request.onsuccess = (event) => resolve(event.target.result);
+                request.onerror = (event) => reject(event.target.error);
+            });
+        }
+
+        function idbGet(key) {
+            return new Promise((resolve, reject) => {
+                if (!idbInstance) { reject(new Error('IndexedDB no inicializada')); return; }
+                const req = idbInstance.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        function idbSet(key, value) {
+            return new Promise((resolve, reject) => {
+                if (!idbInstance) { reject(new Error('IndexedDB no inicializada')); return; }
+                const tx = idbInstance.transaction(IDB_STORE, 'readwrite');
+                tx.objectStore(IDB_STORE).put(value, key);
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        // Se llama una vez al iniciar la app; deja lista idbInstance/idbAvailable para todo lo demás.
+        async function initStorage() {
+            try {
+                idbInstance = await openIndexedDB();
+                idbAvailable = true;
+            } catch (err) {
+                console.error('IndexedDB no disponible, se usará localStorage como respaldo:', err);
+                idbAvailable = false;
+            }
+            return idbAvailable;
+        }
+
         // Verifica de inmediato (antes de cargar nada) si localStorage realmente funciona en
         // este navegador/contexto. A diferencia del aviso que aparece solo cuando falla un guardado,
         // esta prueba corre apenas se abre la página, así que detecta de entrada casos como
@@ -1432,11 +1485,12 @@
             }
         }
 
-        document.addEventListener("DOMContentLoaded", () => {
+        document.addEventListener("DOMContentLoaded", async () => {
             document.getElementById('brand-logo-sidebar').src = LOGO_DATA_URI;
             document.getElementById('brand-logo-ticket').src = LOGO_DATA_URI;
 
-            const storageOk = testLocalStorageAvailability();
+            await initStorage();
+            const storageOk = idbAvailable || testLocalStorageAvailability();
             updateStorageIndicator(storageOk);
             if (!storageOk) {
                 showToast('El navegador está bloqueando el guardado local en este contexto (revisa si estás en modo privado/incógnito o si abriste el archivo con doble clic). Los datos NO se guardarán al cerrar.', 'danger');
@@ -1455,7 +1509,7 @@
             document.getElementById('tip-date').value = todayStr;
             document.getElementById('exp-date').value = todayStr;
 
-            loadData();
+            await loadData();
             renderCategoryFilters();
             renderProductGrid();
             renderCart();
@@ -1468,14 +1522,38 @@
             renderTipsModule();
         });
 
-        function loadData() {
-            let stored;
-            try {
-                stored = localStorage.getItem(STORAGE_KEY);
-            } catch (err) {
-                console.error('No se pudo acceder al almacenamiento local:', err);
-                showToast('El almacenamiento local no está disponible en este navegador. Los datos no se guardarán entre sesiones.', 'warning');
-                return;
+        async function loadData() {
+            let stored = null;
+
+            if (idbAvailable) {
+                try {
+                    stored = await idbGet(STORAGE_KEY);
+                } catch (err) {
+                    console.error('No se pudo leer de IndexedDB:', err);
+                }
+            }
+
+            // Migración de una sola vez: si IndexedDB está vacía pero hay un respaldo antiguo en
+            // localStorage (de antes de este cambio), se copia automáticamente a IndexedDB para
+            // no perder el histórico existente.
+            if (!stored) {
+                let legacy = null;
+                try {
+                    legacy = localStorage.getItem(STORAGE_KEY);
+                } catch (err) {
+                    console.error('No se pudo acceder al almacenamiento local:', err);
+                }
+                if (legacy) {
+                    stored = legacy;
+                    if (idbAvailable) {
+                        try {
+                            await idbSet(STORAGE_KEY, legacy);
+                            console.info('Datos migrados de localStorage a IndexedDB correctamente.');
+                        } catch (err) {
+                            console.error('No se pudo migrar el respaldo a IndexedDB:', err);
+                        }
+                    }
+                }
             }
 
             if (!stored) return; // Primer uso: no hay nada guardado todavía, se queda con los arreglos vacíos por defecto
@@ -2546,9 +2624,23 @@
             };
         }
 
-        function saveData() {
+        async function saveData() {
+            const snapshot = JSON.stringify(buildStateSnapshot());
+
+            if (idbAvailable) {
+                try {
+                    await idbSet(STORAGE_KEY, snapshot);
+                    updateStorageIndicator(true);
+                    return;
+                } catch (err) {
+                    console.error('Error al guardar en IndexedDB, se intentará localStorage como reserva:', err);
+                    // No hacemos return aquí: seguimos abajo e intentamos guardar en localStorage
+                    // para no perder el cambio si IndexedDB falló por algún motivo puntual.
+                }
+            }
+
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(buildStateSnapshot()));
+                localStorage.setItem(STORAGE_KEY, snapshot);
                 updateStorageIndicator(true);
             } catch (err) {
                 console.error('Error al guardar en almacenamiento local:', err);
