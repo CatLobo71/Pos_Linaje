@@ -2034,23 +2034,23 @@
         async function printTicket() {
             if (!activeTicketSale) return;
             try {
-                // Usamos el MISMO PDF que ya funciona bien en "Descargar" y "Compartir", en vez
-                // de intentar imprimir la página en vivo con CSS (@media print), que resultó
-                // poco confiable según el navegador. El PDF pre-generado ya está listo casi
-                // siempre, así que window.open() se dispara de inmediato dentro del clic.
+                // Abrimos el mismo PDF que ya funciona en "Descargar"/"Compartir" en una pestaña
+                // nueva. Ya NO disparamos window.print() automáticamente: en iPad, Safari a veces
+                // considera que la pestaña "no terminó de cargar" el PDF y muestra un aviso
+                // confuso. Es más confiable dejar que el usuario use el ícono de imprimir/compartir
+                // que trae el propio visor de PDF del navegador.
                 const pdfFile = cachedTicketPDFFile || await getTicketPDFBlob();
                 const blobUrl = URL.createObjectURL(pdfFile);
                 const printWindow = window.open(blobUrl, '_blank');
                 if (!printWindow) {
-                    showToast('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes o usa "Descargar PDF".', 'warning');
+                    showToast('El navegador bloqueó la ventana. Permite ventanas emergentes o usa "Descargar PDF".', 'warning');
                     return;
                 }
-                printWindow.addEventListener('load', () => {
-                    try { printWindow.focus(); printWindow.print(); } catch (e) { /* el usuario puede imprimir desde el visor de PDF que se abrió */ }
-                });
+                showToast('Se abrió el ticket en una pestaña nueva: usa el ícono de imprimir de tu navegador ahí.', 'success');
             } catch (err) {
                 console.error(err);
-                showToast('No se pudo preparar la impresión. Intenta con "Descargar PDF".', 'warning');
+                const detalle = err && err.message ? err.message : 'desconocido';
+                showToast(`No se pudo preparar la impresión (detalle: ${detalle}). Intenta con "Descargar PDF".`, 'warning');
             }
         }
 
@@ -2070,18 +2070,37 @@
             };
         }
 
+        // Genera el worker de html2pdf pero revisa el canvas capturado ANTES de convertirlo a PDF:
+        // si sale vacío o de tamaño casi 0, el PDF final se vería en blanco sin lanzar ningún
+        // error — así lo detectamos a tiempo y avisamos con un mensaje real en vez de fallar en silencio.
+        // IMPORTANTE: debe ser function() normal (no arrow) — html2pdf.js entrega el canvas en
+        // this.prop.canvas, no como argumento del callback; con arrow function "this" apuntaba a
+        // otra cosa y canvas siempre salía undefined, reportando "vacío" aunque la captura sí
+        // funcionara (ese fue el bug de la versión anterior).
+        function generateTicketPdfWorker(element, opt) {
+            return html2pdf().set(opt).from(element).toCanvas().then(function () {
+                const canvas = this.prop.canvas;
+                if (!canvas || canvas.width < 10 || canvas.height < 10) {
+                    throw new Error(`Captura del ticket vacía (${canvas ? canvas.width : 0}x${canvas ? canvas.height : 0}px)`);
+                }
+            }).toPdf();
+        }
+
         function downloadPDF() {
             if (!activeTicketSale) return;
             const element = document.getElementById('printable-ticket');
             const opt = buildTicketPdfOptions(element, `Ticket_${activeTicketSale.id}.pdf`);
-            html2pdf().set(opt).from(element).save();
+            generateTicketPdfWorker(element, opt).save().catch(err => {
+                console.error('Error al generar el PDF para descargar:', err);
+                const detalle = err && err.message ? err.message : 'desconocido';
+                showToast(`No se pudo generar el PDF (detalle: ${detalle}).`, 'warning');
+            });
         }
 
         async function getTicketPDFBlob() {
             const element = document.getElementById('printable-ticket');
             const opt = buildTicketPdfOptions(element, `Ticket_${activeTicketSale.id}.pdf`);
-            const pdfWorker = html2pdf().set(opt).from(element).toPdf();
-            const blob = await pdfWorker.output('blob');
+            const blob = await generateTicketPdfWorker(element, opt).output('blob');
             return new File([blob], `Ticket_${activeTicketSale.id}.pdf`, { type: 'application/pdf' });
         }
 
