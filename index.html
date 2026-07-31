@@ -13,7 +13,10 @@
     <!-- Plugin para mostrar etiquetas de datos directamente sobre las gráficas -->
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <!-- html2pdf.js para exportación directa a PDF -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <!-- html2pdf.js: se usa v0.9.3 (no la 0.10.x) porque los propios desarrolladores advierten
+         varios problemas reportados sin resolver en la rama 0.10 — coincide con el comportamiento
+         errático de PDFs en blanco que veníamos viendo. -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
     <!-- SheetJS para leer archivos Excel al importar ventas históricas -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
@@ -1383,7 +1386,7 @@
 
         let currentCheckoutTotal = 0;
         let activeTicketSale = null;
-        let cachedTicketPDFFile = null; // PDF pre-generado del ticket activo, para que "Compartir PDF" no dependa de un await lento
+        let ticketModalFullyShown = false;
 
         let currentFolioNumber = 0;
         const STORAGE_KEY = 'linaje_sabor_pos_data';
@@ -1502,6 +1505,12 @@
             crudProductModalInstance = new bootstrap.Modal(document.getElementById('crudProductModal'));
             checkoutModalInstance = new bootstrap.Modal(document.getElementById('checkoutModal'));
             ticketModalInstance = new bootstrap.Modal(document.getElementById('ticketModal'));
+            // Llevamos registro de cuándo el modal del ticket terminó su animación de apertura
+            // (evento 'shown.bs.modal'). Si se genera el PDF ANTES de eso, la captura puede
+            // salir en blanco o "fantasma" porque el modal aún está a medio aparecer (opacidad
+            // en transición). ensureTicketModalReady() espera a este momento antes de capturar.
+            document.getElementById('ticketModal').addEventListener('shown.bs.modal', () => { ticketModalFullyShown = true; });
+            document.getElementById('ticketModal').addEventListener('hide.bs.modal', () => { ticketModalFullyShown = false; });
             expenseModalInstance = new bootstrap.Modal(document.getElementById('expenseModal'));
             confirmActionModalInstance = new bootstrap.Modal(document.getElementById('confirmActionModal'));
 
@@ -1983,7 +1992,6 @@
 
         function displayTicket(sale) {
             activeTicketSale = sale;
-            cachedTicketPDFFile = null;
             document.getElementById('t-folio').innerText = sale.id;
             document.getElementById('t-date').innerText = sale.date;
             document.getElementById('t-service').innerText = sale.service;
@@ -2007,13 +2015,10 @@
             document.getElementById('t-change').innerText = `${formatMoney((sale.change || 0))}`;
 
             ticketModalInstance.show();
-
-            // Pre-generar el PDF en segundo plano, pero solo hasta que el modal ya esté
-            // COMPLETAMENTE visible ('shown.bs.modal'). Generarlo justo al llamar show() (antes)
-            // capturaba el alto del ticket a medio abrir la animación, dando un PDF casi vacío.
-            document.getElementById('ticketModal').addEventListener('shown.bs.modal', () => {
-                getTicketPDFBlob().then(file => { cachedTicketPDFFile = file; }).catch(err => console.error(err));
-            }, { once: true });
+            // Ya NO se pre-genera el PDF en automático al mostrar el ticket: hacerlo en cada
+            // venta (se haya pedido el PDF o no) iba acumulando trabajo pesado de captura en la
+            // misma sesión del navegador y degradaba las siguientes generaciones. Ahora el PDF
+            // solo se genera cuando el usuario realmente toca Descargar/Compartir/Imprimir.
         }
 
         function cancelSaleFromTicket() {
@@ -2039,7 +2044,7 @@
                 // considera que la pestaña "no terminó de cargar" el PDF y muestra un aviso
                 // confuso. Es más confiable dejar que el usuario use el ícono de imprimir/compartir
                 // que trae el propio visor de PDF del navegador.
-                const pdfFile = cachedTicketPDFFile || await getTicketPDFBlob();
+                const pdfFile = await getTicketPDFBlob();
                 const blobUrl = URL.createObjectURL(pdfFile);
                 const printWindow = window.open(blobUrl, '_blank');
                 if (!printWindow) {
@@ -2070,27 +2075,69 @@
             };
         }
 
-        // Genera el worker de html2pdf pero revisa el canvas capturado ANTES de convertirlo a PDF:
-        // si sale vacío o de tamaño casi 0, el PDF final se vería en blanco sin lanzar ningún
-        // error — así lo detectamos a tiempo y avisamos con un mensaje real en vez de fallar en silencio.
-        // IMPORTANTE: debe ser function() normal (no arrow) — html2pdf.js entrega el canvas en
-        // this.prop.canvas, no como argumento del callback; con arrow function "this" apuntaba a
-        // otra cosa y canvas siempre salía undefined, reportando "vacío" aunque la captura sí
-        // funcionara (ese fue el bug de la versión anterior).
-        function generateTicketPdfWorker(element, opt) {
-            return html2pdf().set(opt).from(element).toCanvas().then(function () {
-                const canvas = this.prop.canvas;
-                if (!canvas || canvas.width < 10 || canvas.height < 10) {
-                    throw new Error(`Captura del ticket vacía (${canvas ? canvas.width : 0}x${canvas ? canvas.height : 0}px)`);
+        // Quita cualquier elemento que html2canvas pueda dejar "olvidado" en el DOM tras generar
+        // el PDF (a veces no se limpia solo entre usos seguidos, lo que puede interferir con la
+        // siguiente captura y dejarla en blanco).
+        function limpiarResiduosHtml2Canvas() {
+            document.querySelectorAll('.html2canvas-container').forEach(el => el.remove());
+        }
+
+        // Espera a que el modal del ticket haya terminado su animación de apertura antes de
+        // capturar el PDF. Si ya está listo, no espera nada (caso normal). Si el usuario alcanzó
+        // a tocar el botón mientras el modal seguía apareciendo, espera ese resto de animación
+        // para no capturar un ticket a medio transparentar.
+        function ensureTicketModalReady() {
+            if (ticketModalFullyShown) return Promise.resolve();
+            return new Promise(resolve => {
+                document.getElementById('ticketModal').addEventListener('shown.bs.modal', () => resolve(), { once: true });
+            });
+        }
+
+        // Genera el PDF del ticket como Blob, con un reintento automático: si la primera captura
+        // sale vacía (falla intermitente conocida al generar varios PDFs seguidos en la misma
+        // página sin recargarla), espera un instante, limpia residuos y lo intenta una vez más
+        // antes de darse por vencido. IMPORTANTE: el callback de .toCanvas().then() debe ser
+        // function() normal (no arrow) — html2pdf.js entrega el canvas en this.prop.canvas, no
+        // como argumento del callback.
+        async function generateTicketPdfBlob(element, opt) {
+            await ensureTicketModalReady();
+            let lastErr;
+            for (let intento = 1; intento <= 2; intento++) {
+                try {
+                    const blob = await html2pdf().set(opt).from(element).toCanvas().then(function () {
+                        const canvas = this.prop.canvas;
+                        if (!canvas || canvas.width < 10 || canvas.height < 10) {
+                            throw new Error(`Captura del ticket vacía (${canvas ? canvas.width : 0}x${canvas ? canvas.height : 0}px)`);
+                        }
+                    }).toPdf().output('blob');
+                    limpiarResiduosHtml2Canvas();
+                    return blob;
+                } catch (err) {
+                    lastErr = err;
+                    limpiarResiduosHtml2Canvas();
+                    if (intento < 2) await new Promise(resolve => setTimeout(resolve, 400));
                 }
-            }).toPdf();
+            }
+            throw lastErr;
         }
 
         function downloadPDF() {
             if (!activeTicketSale) return;
             const element = document.getElementById('printable-ticket');
-            const opt = buildTicketPdfOptions(element, `Ticket_${activeTicketSale.id}.pdf`);
-            generateTicketPdfWorker(element, opt).save().catch(err => {
+            const filename = `Ticket_${activeTicketSale.id}.pdf`;
+            const opt = buildTicketPdfOptions(element, filename);
+            generateTicketPdfBlob(element, opt).then(blob => {
+                // Disparamos la descarga manualmente desde el blob, en vez de usar el método
+                // .save() de html2pdf, para reutilizar la misma lógica con reintento.
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }).catch(err => {
                 console.error('Error al generar el PDF para descargar:', err);
                 const detalle = err && err.message ? err.message : 'desconocido';
                 showToast(`No se pudo generar el PDF (detalle: ${detalle}).`, 'warning');
@@ -2100,7 +2147,7 @@
         async function getTicketPDFBlob() {
             const element = document.getElementById('printable-ticket');
             const opt = buildTicketPdfOptions(element, `Ticket_${activeTicketSale.id}.pdf`);
-            const blob = await generateTicketPdfWorker(element, opt).output('blob');
+            const blob = await generateTicketPdfBlob(element, opt);
             return new File([blob], `Ticket_${activeTicketSale.id}.pdf`, { type: 'application/pdf' });
         }
 
@@ -2145,7 +2192,7 @@
             try {
                 // Usamos el PDF pre-generado si ya está listo; si no, lo generamos al vuelo (menos
                 // confiable en Safari/iPadOS porque puede perder el "gesto de usuario" en el await).
-                const pdfFile = cachedTicketPDFFile || await getTicketPDFBlob();
+                const pdfFile = await getTicketPDFBlob();
                 if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
                     await navigator.share({
                         title: `Ticket ${activeTicketSale.id}`,
