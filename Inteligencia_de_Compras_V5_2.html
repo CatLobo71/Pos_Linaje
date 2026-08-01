@@ -1,0 +1,1632 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Panel Ejecutivo de Compras · Inteligencia de Compras</title>
+
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com"></script>
+<!-- FontAwesome Icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- SheetJS (XLSX Parser) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- Tipografías -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+        }
+      }
+    }
+  }
+</script>
+
+<style>
+    .gradient-header {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        background-image:
+            radial-gradient(circle at 1px 1px, rgba(255,255,255,0.05) 1px, transparent 0),
+            linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        background-size: 22px 22px, 100% 100%;
+    }
+    .card-shadow { box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05); }
+
+    /* Heatmap */
+    .heatmap-cell { transition: background-color 0.3s ease; }
+    .heatmap-cell:hover { border: 2px solid #000; opacity: 0.9; }
+
+    /* Gauge de Salud de Compras (conic-gradient) */
+    .score-gauge {
+        --score: 0;
+        --score-color: #10b981;
+        background: conic-gradient(var(--score-color) calc(var(--score) * 1%), #e2e8f0 0);
+        transition: background 0.7s ease;
+    }
+
+    /* Entrada suave del dashboard (un solo momento orquestado) */
+    @keyframes dashFadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    .animate-dashboard-in { animation: dashFadeIn 0.5s ease-out; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { animation: spin 0.8s linear infinite; }
+
+    @media (prefers-reduced-motion: reduce) {
+        .animate-dashboard-in, .spinner { animation: none !important; }
+        .score-gauge { transition: none !important; }
+    }
+
+    /* Accesibilidad: foco visible */
+    button:focus-visible, select:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+        outline: 2px solid #3b82f6; outline-offset: 2px;
+    }
+
+    /* Impresión / exportación */
+    @media print {
+        .no-print { display: none !important; }
+        body { background: white !important; }
+        .card-shadow { box-shadow: none !important; border: 1px solid #e2e8f0 !important; }
+        main { max-width: 100% !important; }
+        .grid, section { break-inside: avoid; }
+        canvas { max-width: 100% !important; }
+    }
+</style>
+</head>
+<body class="bg-slate-50 font-sans text-slate-800 min-h-screen">
+
+    <!-- Overlay de carga -->
+    <div id="loadingOverlay" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 grid place-items-center px-4">
+        <div class="bg-white rounded-2xl p-8 text-center shadow-2xl max-w-xs w-full">
+            <div class="w-12 h-12 mx-auto border-4 border-slate-200 border-t-blue-600 rounded-full spinner"></div>
+            <p class="mt-4 font-semibold text-slate-700 text-sm">Procesando archivo…</p>
+            <p id="loadingDetail" class="text-xs text-slate-400 mt-1">Leyendo filas y calculando estadísticas</p>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="gradient-header text-white py-6 px-6 sm:px-8 shadow-md">
+        <div class="max-w-7xl mx-auto flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+            <div>
+                <h1 class="text-2xl font-bold flex items-center gap-3">
+                    <span class="w-9 h-9 rounded-lg bg-blue-500/15 border border-blue-400/30 grid place-items-center text-blue-300 text-base">
+                        <i class="fa-solid fa-chart-line"></i>
+                    </span>
+                    Panel Ejecutivo de Compras
+                </h1>
+                <p class="text-slate-400 text-sm mt-1.5">Salud de compras, forecast, mapa de calor y clasificación ABC en un solo lugar</p>
+                <p id="fileMetaInfo" class="hidden text-[11px] text-slate-500 mt-2 items-center gap-2">
+                    <i class="fa-solid fa-file-excel text-emerald-500"></i> <span id="fileMetaText"></span>
+                </p>
+            </div>
+
+            <div id="filterContainer" class="hidden no-print flex-wrap items-center gap-2 bg-slate-800/80 p-2 rounded-xl border border-slate-700 w-full lg:w-auto">
+                <div class="relative">
+                    <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
+                    <input id="searchInput" type="text" placeholder="Buscar proveedor o material..."
+                        class="bg-slate-900 text-white text-sm placeholder-slate-500 py-2 pl-8 pr-3 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 w-44 sm:w-56">
+                </div>
+                <label for="yearSelect" class="sr-only">Año</label>
+                <select id="yearSelect" onchange="filterDataByYear()" class="bg-slate-900 text-white font-semibold text-sm py-2 px-3 rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"></select>
+                <button onclick="window.print()" title="Exportar reporte a PDF" class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-2 px-3 rounded-lg transition-colors flex items-center gap-2">
+                    <i class="fa-solid fa-print"></i> <span class="hidden sm:inline">Exportar</span>
+                </button>
+                <button onclick="resetUpload()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs py-2 px-3 rounded-lg transition-colors flex items-center gap-2">
+                    <i class="fa-solid fa-arrow-up-from-bracket"></i> <span class="hidden sm:inline">Cambiar archivo</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Aviso de calidad de datos -->
+    <div id="dataQualityBanner" class="hidden no-print max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-5">
+        <div class="bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl px-4 py-3 flex items-start gap-3">
+            <i class="fa-solid fa-triangle-exclamation mt-0.5"></i>
+            <div>
+                <p class="font-semibold">Se detectaron algunos datos incompletos en el archivo</p>
+                <p id="dataQualityText" class="mt-0.5 text-amber-700"></p>
+            </div>
+            <button onclick="document.getElementById('dataQualityBanner').classList.add('hidden')" class="ml-auto text-amber-500 hover:text-amber-700" aria-label="Cerrar aviso">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        <!-- Upload Dropzone -->
+        <div id="uploadZone" class="bg-white rounded-2xl border-2 border-dashed border-slate-300 p-12 text-center card-shadow hover:border-blue-500 transition-all cursor-pointer max-w-2xl mx-auto my-12" onclick="document.getElementById('fileInput').click()" role="button" tabindex="0" onkeydown="if(event.key==='Enter'||event.key===' ')document.getElementById('fileInput').click()">
+            <input type="file" id="fileInput" accept=".xlsx, .xls" class="hidden" onchange="handleFileSelect(event)">
+            <div class="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl">
+                <i class="fa-solid fa-file-excel"></i>
+            </div>
+            <h3 class="text-lg font-bold text-slate-700">Cargar archivo de Excel de Compras</h3>
+            <p class="text-slate-400 text-sm mt-1">Arrastra tu archivo aquí o haz clic para examinar</p>
+            <p class="text-xs text-slate-400 mt-4 bg-slate-100 py-1 px-3 rounded-full inline-block">Soporta: .xlsx, .xls (Estructura: TOTAL, CANTIDAD, COSTO, PROVEEDOR, MATERIAL, FAMILIA, GRUPO, FECHA)</p>
+            <div id="uploadError" class="hidden mt-5 text-left">
+                <div class="bg-rose-50 border border-rose-200 text-rose-700 text-sm rounded-xl px-4 py-3 flex items-center gap-2">
+                    <i class="fa-solid fa-circle-exclamation"></i><span id="uploadErrorText"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard Content -->
+        <div id="dashboardContent" class="hidden space-y-8">
+
+            <!-- SECCIÓN 1: SCORE DE COMPRAS & FORECAST -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Salud de Compras -->
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow flex flex-col justify-center relative overflow-hidden">
+                    <div class="absolute -right-10 -top-10 w-32 h-32 bg-slate-50 rounded-full opacity-50"></div>
+                    <h3 class="font-bold text-slate-700 mb-2 flex items-center gap-2">
+                        <i class="fa-solid fa-heart-pulse text-rose-500"></i> Salud de Compras
+                    </h3>
+                    <div class="flex items-center gap-6 mt-2">
+                        <div class="relative w-24 h-24 shrink-0 rounded-full score-gauge grid place-items-center" id="scoreCircle">
+                            <div class="w-[78%] h-[78%] bg-white rounded-full grid place-items-center">
+                                <span id="scoreValue" class="text-2xl font-black text-slate-800 font-mono tabular-nums">--</span>
+                            </div>
+                        </div>
+                        <div>
+                            <p id="scoreStatus" class="text-xl font-bold text-slate-400 flex items-center gap-2">Calculando…</p>
+                            <ul class="text-xs text-slate-500 mt-2 space-y-1">
+                                <li><i id="checkInflacion" class="fa-solid fa-minus text-slate-300 w-4"></i> Inflación / Variación</li>
+                                <li><i id="checkConcentracion" class="fa-solid fa-minus text-slate-300 w-4"></i> Concentración de proveedores</li>
+                                <li><i id="checkAhorro" class="fa-solid fa-minus text-slate-300 w-4"></i> Oportunidad de ahorro</li>
+                                <li><i id="checkProveedores" class="fa-solid fa-minus text-slate-300 w-4"></i> Base de proveedores</li>
+                                <li><i id="checkDevoluciones" class="fa-solid fa-minus text-slate-300 w-4"></i> Nivel de devoluciones</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Forecast -->
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow lg:col-span-2">
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 class="font-bold text-slate-700 flex items-center gap-2">
+                                <i class="fa-solid fa-wand-magic-sparkles text-indigo-500"></i> Forecast (Proyección a 3 Meses)
+                            </h3>
+                            <p class="text-xs text-slate-400">Estimación de compra esperada mediante tendencia lineal</p>
+                        </div>
+                        <i class="fa-solid fa-chart-line text-2xl text-slate-200"></i>
+                    </div>
+                    <div class="grid grid-cols-3 gap-4 mt-6" id="forecastCards"></div>
+                </div>
+            </div>
+
+            <!-- SECCIÓN 2: DASHBOARD GERENCIAL (Tarjetas Top) -->
+            <div>
+                <h3 class="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 px-2">Top Insights Gerenciales</h3>
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+
+                    <div class="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
+                        <p class="text-[10px] font-bold text-emerald-600 uppercase">Top Ahorro</p>
+                        <h4 id="topAhorroMat" class="text-sm font-bold text-slate-800 mt-1 truncate" title="-">-</h4>
+                        <p id="topAhorroVal" class="text-xs text-emerald-600 font-medium mt-1 font-mono">0%</p>
+                    </div>
+
+                    <div class="bg-rose-50 p-3 rounded-xl border border-rose-100">
+                        <p class="text-[10px] font-bold text-rose-600 uppercase">Top Incremento</p>
+                        <h4 id="topIncrementoMat" class="text-sm font-bold text-slate-800 mt-1 truncate" title="-">-</h4>
+                        <p id="topIncrementoVal" class="text-xs text-rose-600 font-medium mt-1 font-mono">0%</p>
+                    </div>
+
+                    <div class="bg-orange-50 p-3 rounded-xl border border-orange-100">
+                        <p class="text-[10px] font-bold text-orange-600 uppercase">Top Inflación Gral</p>
+                        <h4 id="topInflacionGral" class="text-sm font-bold text-slate-800 mt-1 font-mono">0%</h4>
+                        <p class="text-[10px] text-orange-600 mt-1">Promedio periodo</p>
+                    </div>
+
+                    <div class="bg-blue-50 p-3 rounded-xl border border-blue-100">
+                        <p class="text-[10px] font-bold text-blue-600 uppercase">Top Proveedor</p>
+                        <h4 id="topProveedorInfo" class="text-sm font-bold text-slate-800 mt-1 truncate" title="-">-</h4>
+                        <p id="topProveedorVal" class="text-[10px] text-blue-600 mt-1 font-mono">-</p>
+                    </div>
+
+                    <div class="bg-indigo-50 p-3 rounded-xl border border-indigo-100">
+                        <p class="text-[10px] font-bold text-indigo-600 uppercase">Top Material</p>
+                        <h4 id="topMaterialInfo" class="text-sm font-bold text-slate-800 mt-1 truncate" title="-">-</h4>
+                        <p id="topMaterialVal" class="text-[10px] text-indigo-600 mt-1 font-mono">-</p>
+                    </div>
+
+                    <div class="bg-purple-50 p-3 rounded-xl border border-purple-100">
+                        <p class="text-[10px] font-bold text-purple-600 uppercase">Top Familia</p>
+                        <h4 id="topFamiliaInfo" class="text-sm font-bold text-slate-800 mt-1 truncate" title="-">-</h4>
+                        <p id="topFamiliaVal" class="text-[10px] text-purple-600 mt-1 font-mono">-</p>
+                    </div>
+
+                    <div class="bg-amber-50 p-3 rounded-xl border border-amber-100">
+                        <p class="text-[10px] font-bold text-amber-600 uppercase">Top Grupo</p>
+                        <h4 id="topGrupoInfo" class="text-sm font-bold text-slate-800 mt-1 truncate" title="-">-</h4>
+                        <p id="topGrupoVal" class="text-[10px] text-amber-600 mt-1 font-mono">-</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- KPIs Principales -->
+            <section class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+                <div class="bg-white p-5 rounded-xl border border-slate-200 card-shadow">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Compra Total</p>
+                    <h3 id="kpiCompraTotal" class="text-xl font-black text-slate-800 mt-2 font-mono tabular-nums">$0.00</h3>
+                    <span class="text-xs text-blue-600 font-medium mt-1 inline-block"><i class="fa-solid fa-wallet"></i> Acumulado</span>
+                </div>
+                <div class="bg-white p-5 rounded-xl border border-slate-200 card-shadow">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Promedio Mensual</p>
+                    <h3 id="kpiPromedioMensual" class="text-xl font-black text-slate-800 mt-2 font-mono tabular-nums">$0.00</h3>
+                    <span class="text-xs text-slate-500 mt-1 inline-block"><i class="fa-solid fa-calendar-days"></i> Gasto / Mes</span>
+                </div>
+                <div class="bg-white p-5 rounded-xl border border-slate-200 card-shadow">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Cantidad Total</p>
+                    <h3 id="kpiCantidadTotal" class="text-xl font-black text-slate-800 mt-2 font-mono tabular-nums">0</h3>
+                    <span class="text-xs text-slate-500 mt-1 inline-block"><i class="fa-solid fa-boxes-stacked"></i> Unidades</span>
+                </div>
+                <div class="bg-white p-5 rounded-xl border border-slate-200 card-shadow">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Ticket Promedio</p>
+                    <h3 id="kpiTicketPromedio" class="text-xl font-black text-slate-800 mt-2 font-mono tabular-nums">$0.00</h3>
+                    <span class="text-xs text-slate-500 mt-1 inline-block"><i class="fa-solid fa-receipt"></i> Por Factura</span>
+                </div>
+                <div class="bg-white p-5 rounded-xl border border-slate-200 card-shadow">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Precio Ponderado</p>
+                    <h3 id="kpiPrecioPromPonderado" class="text-xl font-black text-slate-800 mt-2 font-mono tabular-nums">$0.00</h3>
+                    <span class="text-xs text-slate-500 mt-1 inline-block"><i class="fa-solid fa-tag"></i> Costo / Unidad</span>
+                </div>
+                <div class="bg-white p-5 rounded-xl border border-slate-200 card-shadow">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Prov. Activos</p>
+                    <h3 id="kpiProveedores" class="text-xl font-black text-slate-800 mt-2 font-mono tabular-nums">0</h3>
+                    <span class="text-xs text-emerald-600 font-medium mt-1 inline-block"><i class="fa-solid fa-building"></i> Empresas</span>
+                </div>
+                <div class="bg-white p-5 rounded-xl border border-slate-200 card-shadow">
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Devoluciones</p>
+                    <h3 id="kpiDevoluciones" class="text-xl font-black text-slate-800 mt-2 font-mono tabular-nums">$0.00</h3>
+                    <span id="kpiDevolucionesSub" class="text-xs text-slate-500 mt-1 inline-block"><i class="fa-solid fa-rotate-left"></i> 0 movimientos</span>
+                </div>
+            </section>
+
+            <!-- SECCIÓN 3: HEATMAP -->
+            <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
+                    <h3 class="font-bold text-slate-700 flex items-center gap-2">
+                        <i class="fa-solid fa-fire text-red-500"></i> Heatmap de Gasto (Materiales vs Meses)
+                    </h3>
+                    <span id="heatmapHint" class="text-xs text-slate-400">Mientras más rojo, más gasto · Top 10 materiales</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs text-center border-collapse">
+                        <thead class="text-slate-500">
+                            <tr>
+                                <th class="p-2 text-left w-1/5 border-b">Material</th>
+                                <th class="p-2 border-b">Ene</th><th class="p-2 border-b">Feb</th><th class="p-2 border-b">Mar</th>
+                                <th class="p-2 border-b">Abr</th><th class="p-2 border-b">May</th><th class="p-2 border-b">Jun</th>
+                                <th class="p-2 border-b">Jul</th><th class="p-2 border-b">Ago</th><th class="p-2 border-b">Sep</th>
+                                <th class="p-2 border-b">Oct</th><th class="p-2 border-b">Nov</th><th class="p-2 border-b">Dic</th>
+                            </tr>
+                        </thead>
+                        <tbody id="heatmapBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- SECCIÓN 3B: DETALLE DE COMPRAS POR MES Y AÑO (Proveedor / Familia / Material) -->
+            <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                <div class="flex justify-between items-center mb-4 flex-wrap gap-3">
+                    <h3 class="font-bold text-slate-700 flex items-center gap-2">
+                        <i class="fa-solid fa-table-cells text-cyan-600"></i> Detalle de Compras por Mes y Año
+                    </h3>
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <div id="desgloseMetricToggle" class="hidden bg-slate-100 rounded-lg p-1 text-xs font-semibold">
+                            <button id="metricBtnMonto" onclick="setDesgloseMetric('monto')" class="px-3 py-1.5 rounded-md transition-colors">
+                                <i class="fa-solid fa-sack-dollar mr-1"></i>Monto de Compra
+                            </button>
+                            <button id="metricBtnPrecio" onclick="setDesgloseMetric('precio')" class="px-3 py-1.5 rounded-md transition-colors">
+                                <i class="fa-solid fa-tag mr-1"></i>Precio Promedio
+                            </button>
+                        </div>
+                        <div class="flex bg-slate-100 rounded-lg p-1 text-xs font-semibold">
+                            <button id="tabBtnProveedor" onclick="setDesgloseTab('proveedor')" class="px-3 py-1.5 rounded-md transition-colors">Proveedor</button>
+                            <button id="tabBtnFamilia" onclick="setDesgloseTab('familia')" class="px-3 py-1.5 rounded-md transition-colors">Familia</button>
+                            <button id="tabBtnGrupo" onclick="setDesgloseTab('grupo')" class="px-3 py-1.5 rounded-md transition-colors">Grupo</button>
+                            <button id="tabBtnMaterial" onclick="setDesgloseTab('material')" class="px-3 py-1.5 rounded-md transition-colors">Material</button>
+                        </div>
+                        <span id="desgloseCount" class="text-[10px] text-slate-400 whitespace-nowrap"></span>
+                    </div>
+                </div>
+                <div class="overflow-auto max-h-[28rem] border border-slate-100 rounded-lg">
+                    <table class="w-full text-xs text-right border-collapse min-w-[900px]">
+                        <thead class="text-slate-500">
+                            <tr>
+                                <th class="p-2 text-left sticky left-0 top-0 z-30 bg-slate-50 border-b" id="desgloseColHead">Proveedor</th>
+                                <th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Ene</th><th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Feb</th><th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Mar</th>
+                                <th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Abr</th><th class="p-2 border-b sticky top-0 z-20 bg-slate-50">May</th><th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Jun</th>
+                                <th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Jul</th><th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Ago</th><th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Sep</th>
+                                <th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Oct</th><th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Nov</th><th class="p-2 border-b sticky top-0 z-20 bg-slate-50">Dic</th>
+                                <th class="p-2 border-b sticky top-0 z-20 bg-slate-50 text-slate-700" id="desgloseTotalColHead">Total Anual</th>
+                            </tr>
+                        </thead>
+                        <tbody id="desgloseBody"></tbody>
+                    </table>
+                </div>
+                <p id="desgloseFootnote" class="text-[10px] text-slate-400 mt-2">Montos en MXN (pasa el cursor sobre una celda para ver el monto exacto) · usa el buscador de la barra superior para encontrar un proveedor o material específico.</p>
+            </div>
+
+            <!-- SECCIÓN 3C: COMPARADOR DE PRECIOS ENTRE PROVEEDORES -->
+            <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                <div class="flex justify-between items-center mb-1 flex-wrap gap-3">
+                    <h3 class="font-bold text-slate-700 flex items-center gap-2">
+                        <i class="fa-solid fa-scale-balanced text-teal-600"></i> Comparador de Precios entre Proveedores
+                    </h3>
+                </div>
+                <p class="text-xs text-slate-400 mb-4">Encuentra si estás pagando distinto por el mismo material según el proveedor — útil para negociación.</p>
+
+                <div class="relative max-w-md">
+                    <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                    <input id="comparadorInput" type="text" placeholder="Escribe el nombre de un material…"
+                        class="w-full bg-slate-50 text-slate-700 text-sm placeholder-slate-400 py-2.5 pl-9 pr-3 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500">
+                    <div id="comparadorSuggestions" class="hidden absolute z-20 mt-1 w-full bg-white border border-slate-200 rounded-lg shadow-lg max-h-64 overflow-y-auto"></div>
+                </div>
+
+                <div id="comparadorDefaultView" class="mt-5">
+                    <p class="text-xs font-semibold text-slate-500 mb-2">
+                        <i class="fa-solid fa-lightbulb text-amber-500"></i> Mayores oportunidades de negociación (materiales con más de un proveedor, ordenados por diferencia de precio)
+                    </p>
+                    <div id="comparadorOportunidades" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2"></div>
+                </div>
+
+                <div id="comparadorDetailView" class="hidden mt-5">
+                    <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
+                        <h4 id="comparadorMaterialTitle" class="text-sm font-bold text-slate-700"></h4>
+                        <button onclick="closeComparadorDetail()" class="text-xs text-slate-500 hover:text-slate-700 flex items-center gap-1">
+                            <i class="fa-solid fa-arrow-left"></i> Volver a oportunidades
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-xs text-left text-slate-600">
+                            <thead class="text-xs uppercase bg-slate-100 text-slate-700">
+                                <tr>
+                                    <th class="p-2">Proveedor</th>
+                                    <th class="p-2 text-right">Precio Promedio</th>
+                                    <th class="p-2 text-right">Cantidad Comprada</th>
+                                    <th class="p-2 text-right">Gasto Total</th>
+                                    <th class="p-2 text-right">Vs. más barato</th>
+                                </tr>
+                            </thead>
+                            <tbody id="comparadorTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GRÁFICAS: FAMILIAS Y GRUPOS DE MATERIALES -->
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                    <h3 class="font-bold text-slate-700 mb-4 flex items-center gap-2">
+                        <i class="fa-solid fa-layer-group text-blue-500"></i> Compras por Familia de Materiales
+                    </h3>
+                    <div class="h-80"><canvas id="chartComprasFamilia"></canvas></div>
+                </div>
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                    <h3 class="font-bold text-slate-700 mb-4 flex items-center gap-2">
+                        <i class="fa-solid fa-boxes-stacked text-emerald-500"></i> Top 10 de Grupos de Materiales
+                    </h3>
+                    <div class="h-80"><canvas id="chartTopGrupos"></canvas></div>
+                </div>
+            </div>
+
+            <!-- TABLAS: CLASIFICACIONES ABC -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                    <div class="flex justify-between items-center mb-4 gap-2 flex-wrap">
+                        <h3 class="font-bold text-slate-700 flex items-center gap-2">
+                            <i class="fa-solid fa-ranking-star text-amber-500"></i> Clasificación ABC de Proveedores
+                        </h3>
+                        <span id="abcProvCount" class="text-[10px] text-slate-400"></span>
+                    </div>
+                    <div class="overflow-y-auto h-80">
+                        <table class="w-full text-xs text-left text-slate-600">
+                            <thead class="text-xs uppercase bg-slate-100 text-slate-700 sticky top-0">
+                                <tr>
+                                    <th class="p-2">Proveedor</th>
+                                    <th class="p-2 text-right">Total ($)</th>
+                                    <th class="p-2 text-center">Clase</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tableABCProveedores"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                    <div class="flex justify-between items-center mb-4 gap-2 flex-wrap">
+                        <h3 class="font-bold text-slate-700 flex items-center gap-2">
+                            <i class="fa-solid fa-cubes text-purple-500"></i> Clasificación ABC de Materiales
+                        </h3>
+                        <span id="abcMatCount" class="text-[10px] text-slate-400"></span>
+                    </div>
+                    <div class="overflow-y-auto h-80">
+                        <table class="w-full text-xs text-left text-slate-600">
+                            <thead class="text-xs uppercase bg-slate-100 text-slate-700 sticky top-0">
+                                <tr>
+                                    <th class="p-2">Material</th>
+                                    <th class="p-2 text-right">Total ($)</th>
+                                    <th class="p-2 text-center">Clase</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tableABCMateriales"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Visual Charts Grid 1: Trends & Distribution -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow lg:col-span-2">
+                    <h3 class="font-bold text-slate-700 mb-4 flex items-center gap-2">
+                        <i class="fa-solid fa-chart-line text-blue-500"></i> Evolución Mensual: Cantidad vs Importe
+                    </h3>
+                    <div class="h-80"><canvas id="chartEvolucionMensual"></canvas></div>
+                </div>
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                    <h3 class="font-bold text-slate-700 mb-4 flex items-center gap-2">
+                        <i class="fa-solid fa-coins text-amber-500"></i> Compras por Moneda
+                    </h3>
+                    <div class="h-80 flex items-center justify-center"><canvas id="chartMoneda"></canvas></div>
+                </div>
+            </div>
+
+            <!-- Mezcla de Compra y Alertas -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                    <h3 class="font-bold text-slate-700 mb-4 flex items-center gap-2">
+                        <i class="fa-solid fa-chart-area text-pink-500"></i> Evolución Mezcla de Compra (Top 5 Familias)
+                    </h3>
+                    <div class="h-80"><canvas id="chartMezclaFamilias"></canvas></div>
+                </div>
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                    <div class="flex justify-between items-center mb-4 gap-2 flex-wrap">
+                        <h3 class="font-bold text-slate-700 flex items-center gap-2">
+                            <i class="fa-solid fa-triangle-exclamation text-red-500"></i> Alertas de Variación de Costos (&gt;5%)
+                        </h3>
+                        <span id="alertasCount" class="text-[10px] text-slate-400"></span>
+                    </div>
+                    <div class="overflow-y-auto h-80">
+                        <table class="w-full text-xs text-left text-slate-600">
+                            <thead class="text-xs uppercase bg-slate-100 text-slate-700 sticky top-0">
+                                <tr>
+                                    <th class="p-2">Material</th>
+                                    <th class="p-2 text-right">C. Inicial</th>
+                                    <th class="p-2 text-right">C. Final</th>
+                                    <th class="p-2 text-right">Var %</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tableAlertasCostos"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ABC y Pareto -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                    <h3 class="font-bold text-slate-700 mb-4 flex items-center gap-2">
+                        <i class="fa-solid fa-trophy text-yellow-500"></i> Top 10 Proveedores
+                    </h3>
+                    <div class="h-80"><canvas id="chartTopProveedores"></canvas></div>
+                </div>
+                <div class="bg-white p-6 rounded-2xl border border-slate-200 card-shadow">
+                    <h3 class="font-bold text-slate-700 mb-4 flex items-center gap-2">
+                        <i class="fa-solid fa-chart-pie text-emerald-500"></i> Pareto Materiales (Top 20)
+                    </h3>
+                    <div class="h-80"><canvas id="chartParetoMateriales"></canvas></div>
+                </div>
+            </div>
+
+            <p class="no-print text-center text-[11px] text-slate-400 pt-2">
+                Montos consolidados en MXN utilizando el tipo de cambio de póliza (columna TIPOCAM) cuando aplica.
+            </p>
+        </div>
+    </main>
+
+    <!-- JavaScript Logic -->
+    <script>
+        // ==========================================
+        // ESTADO GLOBAL
+        // ==========================================
+        let rawDataset = [];
+        let filteredDataset = [];
+        let availableYears = [];
+        let chartInstances = {};
+        let variacionesCostosGlobales = [];
+        let searchTerm = '';
+        let searchDebounceId = null;
+        let matchingDataset = []; // subconjunto de filteredDataset cuyas filas coinciden con searchTerm en CUALQUIER campo
+        let desgloseTab = 'proveedor'; // 'proveedor' | 'familia' | 'grupo' | 'material'
+        let desgloseMetric = 'monto'; // 'monto' | 'precio' (precio solo aplica a la pestaña Material)
+
+        // Búsqueda cruzada: antes, el buscador filtraba cada tabla por el
+        // nombre de SU PROPIA dimensión (p.ej. la tabla de Proveedores solo
+        // comparaba contra nombres de proveedor). Eso causaba que buscar un
+        // material (p.ej. "SINT") mostrara resultados en la pestaña Material
+        // pero "0 de 0" en Proveedor o Familia, aunque ese material sí tenga
+        // proveedor y familia. Ahora se calcula primero qué FILAS coinciden
+        // (por proveedor, familia, grupo o material) y cada vista se agrega
+        // a partir de esas filas, así que cambiar de pestaña muestra los
+        // proveedores/familias/grupos realmente relacionados con la búsqueda.
+        function computeMatchingDataset() {
+            if (!searchTerm) return filteredDataset;
+            return filteredDataset.filter(item =>
+                item.proveedor.toUpperCase().includes(searchTerm) ||
+                item.familia.toUpperCase().includes(searchTerm) ||
+                item.grupo.toUpperCase().includes(searchTerm) ||
+                item.material.toUpperCase().includes(searchTerm)
+            );
+        }
+
+        const MESES_NOMBRES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+        const formatMoney = (val) => '$' + (Number(val) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const formatNum = (val) => (Number(val) || 0).toLocaleString('es-MX', { maximumFractionDigits: 2 });
+        // Formato compacto para celdas densas (tabla de detalle por mes/año);
+        // el monto exacto se muestra en el title="" al pasar el cursor.
+        function formatMoneyCompact(val) {
+            const num = Number(val) || 0;
+            const abs = Math.abs(num);
+            const sign = num < 0 ? '-' : '';
+            if (abs >= 1e6) return sign + '$' + (abs / 1e6).toFixed(2) + 'M';
+            if (abs >= 1e3) return sign + '$' + (abs / 1e3).toFixed(1) + 'k';
+            return sign + '$' + abs.toFixed(0);
+        }
+
+        // Evita que nombres de materiales/proveedores con comillas o símbolos
+        // rompan los atributos e innerHTML de las tablas (bug real detectado:
+        // materiales como PAPEL P/TROQUELAR BLANCO # 1.5" traían comillas dobles).
+        function esc(str) {
+            return String(str).replace(/[&<>"']/g, (c) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        function truncate(str, n) {
+            const s = String(str);
+            return s.length > n ? s.substring(0, n) + '…' : s;
+        }
+
+        // Callback de ticks reutilizable: trunca la etiqueta en el eje pero
+        // Chart.js sigue mostrando el nombre completo en el tooltip porque
+        // `labels` conserva el texto sin recortar.
+        function truncatedTickCallback(maxLen) {
+            return function (value) {
+                const label = this.getLabelForValue(value);
+                return truncate(label, maxLen);
+            };
+        }
+
+        const uploadZone = document.getElementById('uploadZone');
+        uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('border-blue-500', 'bg-blue-50/50'); });
+        uploadZone.addEventListener('dragleave', () => { uploadZone.classList.remove('border-blue-500', 'bg-blue-50/50'); });
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault(); uploadZone.classList.remove('border-blue-500', 'bg-blue-50/50');
+            if (e.dataTransfer.files.length > 0) processFile(e.dataTransfer.files[0]);
+        });
+
+        function handleFileSelect(e) {
+            if (e.target.files.length > 0) processFile(e.target.files[0]);
+        }
+
+        function resetUpload() {
+            document.getElementById('uploadZone').classList.remove('hidden');
+            document.getElementById('dashboardContent').classList.add('hidden');
+            document.getElementById('filterContainer').classList.add('hidden');
+            document.getElementById('filterContainer').classList.remove('flex');
+            document.getElementById('fileMetaInfo').classList.add('hidden');
+            document.getElementById('dataQualityBanner').classList.add('hidden');
+            document.getElementById('fileInput').value = '';
+            hideUploadError();
+        }
+
+        function showUploadError(msg) {
+            document.getElementById('uploadError').classList.remove('hidden');
+            document.getElementById('uploadErrorText').innerText = msg;
+        }
+        function hideUploadError() {
+            document.getElementById('uploadError').classList.add('hidden');
+        }
+        function showLoading(detail) {
+            document.getElementById('loadingDetail').innerText = detail || 'Leyendo filas y calculando estadísticas';
+            document.getElementById('loadingOverlay').classList.remove('hidden');
+        }
+        function hideLoading() {
+            document.getElementById('loadingOverlay').classList.add('hidden');
+        }
+
+        // ==========================================
+        // CARGA Y NORMALIZACIÓN DEL ARCHIVO
+        // ==========================================
+        function processFile(file) {
+            hideUploadError();
+            showLoading('Leyendo el archivo de Excel…');
+
+            const reader = new FileReader();
+            reader.onerror = function () {
+                hideLoading();
+                showUploadError('No se pudo leer el archivo. Intenta nuevamente.');
+            };
+            reader.onload = function (e) {
+                // Pequeño respiro para que el navegador pinte el overlay antes
+                // de bloquear el hilo principal con el parseo de miles de filas.
+                setTimeout(() => {
+                    try {
+                        parseWorkbook(e.target.result, file.name);
+                    } catch (err) {
+                        console.error(err);
+                        hideLoading();
+                        showUploadError('El archivo no pudo procesarse. Verifica que sea un Excel válido con las columnas esperadas.');
+                    }
+                }, 30);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function parseWorkbook(arrayBufferResult, fileName) {
+            const data = new Uint8Array(arrayBufferResult);
+            const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const jsonData = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+
+            if (jsonData.length === 0) {
+                hideLoading();
+                showUploadError('El archivo está vacío.');
+                return;
+            }
+
+            const getCol = (row, names) => {
+                for (let n of names) {
+                    const foundKey = Object.keys(row).find(k => k.trim().toUpperCase() === n.toUpperCase());
+                    if (foundKey && row[foundKey] !== undefined) return row[foundKey];
+                }
+                return '';
+            };
+
+            // Calidad de datos: contadores para el aviso al usuario
+            const dq = { material: 0, proveedor: 0, fecha: 0 };
+
+            // Primer paso: parsear filas y detectar el año más común, para no
+            // asumir un año fijo cuando una fecha viene inválida o vacía.
+            const parsedRows = jsonData.map(row => {
+                let total = parseFloat(getCol(row, ['TOTAL', 'TOTALES', 'IMPORTE', 'MONTO'])) || 0;
+                let cantidad = parseFloat(getCol(row, ['CANTIDAD', 'CANT'])) || 0;
+                let costo = parseFloat(getCol(row, ['COSTO', 'PRECIO', 'PRECIO UNITARIO'])) || 0;
+                let proveedorRaw = String(getCol(row, ['NOMBRE PROVEEDOR', 'PROVEEDOR', 'NOM_PROV'])).trim();
+                let materialRaw = String(getCol(row, ['NOMBRE MATERIAL', 'MATERIAL', 'DESCRIPCION'])).trim();
+                let familia = String(getCol(row, ['FAMILIA', 'FAMILIA_MATERIAL'])).trim() || 'SIN FAMILIA';
+                let grupo = String(getCol(row, ['GRUPO', 'GRUPO_MATERIAL'])).trim() || 'SIN GRUPO';
+                let moneda = String(getCol(row, ['MONEDA'])).trim().toUpperCase() || 'MXN';
+                let factura = String(getCol(row, ['FACTURA', 'NUM_FACTURA', 'NO_FACTURA'])).trim();
+                let entsal = String(getCol(row, ['ENTSAL', 'TIPO_MOV'])).trim().toUpperCase() || 'E';
+
+                if (!proveedorRaw) dq.proveedor++;
+                if (!materialRaw) dq.material++;
+
+                const fechaRaw = getCol(row, ['FECHA', 'FECHA_MOV']);
+                const fechaObj = new Date(fechaRaw);
+                const fechaValida = fechaObj instanceof Date && !isNaN(fechaObj);
+                if (!fechaValida) dq.fecha++;
+
+                const mesCol = parseInt(getCol(row, ['MES']));
+                const mes = (mesCol >= 1 && mesCol <= 12) ? mesCol : (fechaValida ? fechaObj.getMonth() + 1 : null);
+
+                return {
+                    total, cantidad, costo,
+                    proveedor: proveedorRaw || 'DESCONOCIDO',
+                    material: materialRaw || 'DESCONOCIDO',
+                    familia, grupo, moneda, factura, entsal,
+                    mes: mes || 1,
+                    anio: fechaValida ? fechaObj.getFullYear() : null,
+                };
+            });
+
+            const validYears = parsedRows.map(r => r.anio).filter(y => y !== null);
+            const fallbackYear = validYears.length > 0
+                ? Number(Object.entries(validYears.reduce((acc, y) => { acc[y] = (acc[y] || 0) + 1; return acc; }, {})).sort((a, b) => b[1] - a[1])[0][0])
+                : new Date().getFullYear();
+
+            rawDataset = parsedRows.map(r => ({ ...r, anio: r.anio === null ? fallbackYear : r.anio }));
+
+            // Aviso de calidad de datos
+            const banner = document.getElementById('dataQualityBanner');
+            const totalRows = rawDataset.length;
+            if (dq.material > 0 || dq.proveedor > 0 || dq.fecha > 0) {
+                const parts = [];
+                if (dq.material > 0) parts.push(`${formatNum(dq.material)} sin material`);
+                if (dq.proveedor > 0) parts.push(`${formatNum(dq.proveedor)} sin proveedor`);
+                if (dq.fecha > 0) parts.push(`${formatNum(dq.fecha)} con fecha inválida (se asumió ${fallbackYear})`);
+                document.getElementById('dataQualityText').innerText =
+                    `De ${formatNum(totalRows)} registros: ${parts.join(' · ')}. Esas filas se muestran como "DESCONOCIDO" o con valores por defecto.`;
+                banner.classList.remove('hidden');
+            } else {
+                banner.classList.add('hidden');
+            }
+
+            availableYears = [...new Set(rawDataset.map(item => item.anio))].sort((a, b) => b - a);
+
+            const select = document.getElementById('yearSelect');
+            select.innerHTML = '';
+            if (availableYears.length > 1) select.innerHTML += `<option value="ALL">Todos los Años</option>`;
+            availableYears.forEach(y => select.innerHTML += `<option value="${y}">${y}</option>`);
+
+            document.getElementById('uploadZone').classList.add('hidden');
+            document.getElementById('dashboardContent').classList.remove('hidden');
+            document.getElementById('dashboardContent').classList.add('animate-dashboard-in');
+            document.getElementById('filterContainer').classList.remove('hidden');
+            document.getElementById('filterContainer').classList.add('flex');
+
+            const metaEl = document.getElementById('fileMetaInfo');
+            document.getElementById('fileMetaText').innerText =
+                `${fileName} · ${formatNum(totalRows)} registros · cargado ${new Date().toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })}`;
+            metaEl.classList.remove('hidden');
+            metaEl.classList.add('flex');
+
+            filterDataByYear();
+            hideLoading();
+        }
+
+        function filterDataByYear() {
+            const val = document.getElementById('yearSelect').value;
+            filteredDataset = val === 'ALL' ? rawDataset : rawDataset.filter(i => i.anio === parseInt(val));
+            renderDashboard();
+        }
+
+        // Búsqueda cruzada: recalcula qué filas coinciden (por proveedor,
+        // familia, grupo o material) y vuelve a dibujar las vistas que
+        // dependen de ella. La clasificación ABC en sí sigue calculándose
+        // sobre el universo completo del año seleccionado; solo cambia qué
+        // filas se muestran.
+        document.getElementById('searchInput').addEventListener('input', (e) => {
+            const value = e.target.value;
+            clearTimeout(searchDebounceId);
+            searchDebounceId = setTimeout(() => {
+                searchTerm = value.trim().toUpperCase();
+                matchingDataset = computeMatchingDataset();
+                renderHeatmap();
+                renderDesglosePeriodo();
+                renderABCClassification();
+                renderAlertasTable();
+            }, 220);
+        });
+
+        function renderDashboard() {
+            matchingDataset = computeMatchingDataset();
+            analyzeVariations();
+            calculateKPIs();
+
+            renderDashboardGerencial();
+            renderScoreCompras();
+            renderForecast();
+            renderHeatmap();
+            renderDesglosePeriodo();
+            renderComparadorPanel();
+            renderComprasFamiliaChart();
+            renderTopGruposChart();
+            renderABCClassification();
+            renderAlertasTable();
+
+            renderEvolucionMensualChart();
+            renderMonedaChart();
+            renderMezclaFamiliasChart();
+            renderTopProveedoresChart();
+            renderParetoMaterialesChart();
+        }
+
+        // ==========================================
+        // ANÁLISIS DE VARIACIÓN DE COSTOS
+        // ==========================================
+        // Corrección importante: el costo unitario SIEMPRE se deriva de
+        // TOTAL/CANTIDAD (ya normalizado a MXN mediante TIPOCAM), en vez de
+        // usar la columna COSTO directamente. Esto evita mezclar precios en
+        // USD y MXN del mismo material (se detectó en los datos reales, p.ej.
+        // "SERVICIO LOGISTICO" y los remaches, cotizados en ambas monedas).
+        // Además, la variación se calcula comparando el costo PROMEDIO
+        // PONDERADO del primer y último mes con datos (no una sola factura
+        // aislada), para no disparar alertas falsas por un dato ruidoso.
+        function analyzeVariations() {
+            const matMonthly = {}; // material -> { mes: {sumTotal, sumCantidad} }
+            variacionesCostosGlobales = [];
+            let totalInf = 0, nInf = 0;
+
+            filteredDataset.forEach(item => {
+                if (item.entsal === 'S') return; // las devoluciones no reflejan precio de compra
+                if (item.cantidad === 0) return;
+
+                if (!matMonthly[item.material]) matMonthly[item.material] = {};
+                if (!matMonthly[item.material][item.mes]) matMonthly[item.material][item.mes] = { sumTotal: 0, sumCantidad: 0 };
+                matMonthly[item.material][item.mes].sumTotal += item.total;
+                matMonthly[item.material][item.mes].sumCantidad += item.cantidad;
+            });
+
+            const htmlAlertas = [];
+
+            Object.keys(matMonthly).forEach(mat => {
+                const meses = Object.keys(matMonthly[mat]).map(Number).sort((a, b) => a - b);
+                if (meses.length < 2) return;
+
+                const primerMes = meses[0];
+                const ultimoMes = meses[meses.length - 1];
+                const p = matMonthly[mat][primerMes];
+                const u = matMonthly[mat][ultimoMes];
+                if (p.sumCantidad === 0 || u.sumCantidad === 0) return;
+
+                const costoInicial = Math.abs(p.sumTotal / p.sumCantidad);
+                const costoFinal = Math.abs(u.sumTotal / u.sumCantidad);
+                if (costoInicial <= 0) return;
+
+                const variacion = ((costoFinal - costoInicial) / costoInicial) * 100;
+                variacionesCostosGlobales.push({ material: mat, variacion, ci: costoInicial, cf: costoFinal, mi: primerMes, mf: ultimoMes });
+                totalInf += variacion; nInf++;
+
+                if (variacion > 5) {
+                    htmlAlertas.push({ material: mat, ci: costoInicial, cf: costoFinal, v: variacion });
+                }
+            });
+
+            window.inflacionPromedio = nInf > 0 ? (totalInf / nInf) : 0;
+            window._htmlAlertasCache = htmlAlertas.sort((a, b) => b.v - a.v);
+        }
+
+        function renderAlertasTable() {
+            const tbody = document.getElementById('tableAlertasCostos');
+            let alertas = window._htmlAlertasCache || [];
+            if (searchTerm) {
+                const matSet = computeMatchSet('material');
+                alertas = alertas.filter(a => matSet.has(a.material));
+            }
+
+            document.getElementById('alertasCount').innerText = alertas.length > 0 ? `${formatNum(alertas.length)} alertas` : '';
+
+            if (alertas.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="4" class="p-4 text-center text-slate-400">${searchTerm ? 'Sin coincidencias para tu búsqueda.' : 'Sin variaciones altas.'}</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = alertas.slice(0, 30).map(a => `
+                <tr class="border-b hover:bg-slate-50">
+                    <td class="p-2 truncate max-w-[150px]" title="${esc(a.material)}">${esc(a.material)}</td>
+                    <td class="p-2 text-right font-mono">${formatMoney(a.ci)}</td>
+                    <td class="p-2 text-right font-mono">${formatMoney(a.cf)}</td>
+                    <td class="p-2 text-right text-red-600 bg-red-50 font-bold font-mono">${a.v.toFixed(1)}%</td>
+                </tr>
+            `).join('');
+        }
+
+        function calculateKPIs() {
+            const compraTotal = filteredDataset.reduce((sum, item) => sum + item.total, 0);
+            const cantidadTotal = filteredDataset.reduce((sum, item) => sum + item.cantidad, 0);
+
+            const mesTotals = Array(12).fill(0);
+            filteredDataset.forEach(i => { if (i.mes >= 1 && i.mes <= 12) mesTotals[i.mes - 1] += i.total; });
+            const mesesActivos = mesTotals.filter(m => m > 0).length || 1;
+
+            // Bug corregido: "Ticket Promedio" nunca se calculaba en la versión
+            // original (el elemento se quedaba fijo en $0.00). Se calcula aquí
+            // como el importe promedio por factura única (columna FACTURA).
+            const facturaTotals = {};
+            filteredDataset.forEach(i => {
+                const key = i.factura || `SIN_FACTURA_${i.proveedor}`;
+                facturaTotals[key] = (facturaTotals[key] || 0) + i.total;
+            });
+            const facturas = Object.values(facturaTotals);
+            const ticketPromedio = facturas.length > 0 ? facturas.reduce((a, b) => a + b, 0) / facturas.length : 0;
+
+            // Devoluciones (ENTSAL = 'S'): antes se netaban en silencio sin
+            // mostrarse en ningún KPI.
+            const devoluciones = filteredDataset.filter(i => i.entsal === 'S');
+            const devolucionesTotal = Math.abs(devoluciones.reduce((sum, i) => sum + i.total, 0));
+
+            document.getElementById('kpiCompraTotal').innerText = formatMoney(compraTotal);
+            document.getElementById('kpiPromedioMensual').innerText = formatMoney(compraTotal / mesesActivos);
+            document.getElementById('kpiCantidadTotal').innerText = formatNum(cantidadTotal);
+            document.getElementById('kpiTicketPromedio').innerText = formatMoney(ticketPromedio);
+            document.getElementById('kpiPrecioPromPonderado').innerText = cantidadTotal > 0 ? formatMoney(compraTotal / cantidadTotal) : '$0.00';
+            document.getElementById('kpiProveedores').innerText = new Set(filteredDataset.map(i => i.proveedor)).size;
+            document.getElementById('kpiDevoluciones').innerText = formatMoney(devolucionesTotal);
+            document.getElementById('kpiDevolucionesSub').innerHTML = `<i class="fa-solid fa-rotate-left"></i> ${formatNum(devoluciones.length)} movimientos`;
+        }
+
+        // ==========================================
+        // DASHBOARD GERENCIAL
+        // ==========================================
+        function renderDashboardGerencial() {
+            const getTop = (key) => {
+                const totals = {};
+                filteredDataset.forEach(i => totals[i[key]] = (totals[i[key]] || 0) + i.total);
+                return Object.entries(totals).sort((a, b) => b[1] - a[1])[0] || ['-', 0];
+            };
+
+            const topProv = getTop('proveedor');
+            const topMat = getTop('material');
+            const topFam = getTop('familia');
+            const topGrp = getTop('grupo');
+
+            document.getElementById('topProveedorInfo').innerText = topProv[0];
+            document.getElementById('topProveedorInfo').title = topProv[0];
+            document.getElementById('topProveedorVal').innerText = formatMoney(topProv[1]);
+
+            document.getElementById('topMaterialInfo').innerText = topMat[0];
+            document.getElementById('topMaterialInfo').title = topMat[0];
+            document.getElementById('topMaterialVal').innerText = formatMoney(topMat[1]);
+
+            document.getElementById('topFamiliaInfo').innerText = topFam[0];
+            document.getElementById('topFamiliaInfo').title = topFam[0];
+            document.getElementById('topFamiliaVal').innerText = formatMoney(topFam[1]);
+
+            document.getElementById('topGrupoInfo').innerText = topGrp[0];
+            document.getElementById('topGrupoInfo').title = topGrp[0];
+            document.getElementById('topGrupoVal').innerText = formatMoney(topGrp[1]);
+
+            const sortedVar = [...variacionesCostosGlobales].sort((a, b) => b.variacion - a.variacion);
+            const maxInc = sortedVar.length > 0 ? sortedVar[0] : { material: '-', variacion: 0 };
+            const maxAhorro = sortedVar.length > 0 ? sortedVar[sortedVar.length - 1] : { material: '-', variacion: 0 };
+
+            document.getElementById('topIncrementoMat').innerText = maxInc.material;
+            document.getElementById('topIncrementoMat').title = maxInc.material;
+            document.getElementById('topIncrementoVal').innerText = `+${maxInc.variacion.toFixed(1)}%`;
+
+            document.getElementById('topAhorroMat').innerText = maxAhorro.variacion < 0 ? maxAhorro.material : '-';
+            document.getElementById('topAhorroMat').title = maxAhorro.material;
+            document.getElementById('topAhorroVal').innerText = maxAhorro.variacion < 0 ? `${maxAhorro.variacion.toFixed(1)}%` : '0%';
+
+            document.getElementById('topInflacionGral').innerText = window.inflacionPromedio > 0 ? `+${window.inflacionPromedio.toFixed(1)}%` : `${window.inflacionPromedio.toFixed(1)}%`;
+        }
+
+        // ==========================================
+        // SCORE DE COMPRAS
+        // ==========================================
+        function renderScoreCompras() {
+            let score = 100;
+
+            const infCheck = document.getElementById('checkInflacion');
+            if (window.inflacionPromedio > 3) { score -= 10; infCheck.className = 'fa-solid fa-xmark text-red-500 w-4'; }
+            else { infCheck.className = 'fa-solid fa-check text-emerald-500 w-4'; }
+
+            const totalsProv = {};
+            let compraTotal = 0;
+            filteredDataset.forEach(i => { totalsProv[i.proveedor] = (totalsProv[i.proveedor] || 0) + i.total; compraTotal += i.total; });
+            const topProv = Object.values(totalsProv).sort((a, b) => b - a)[0] || 0;
+            const concCheck = document.getElementById('checkConcentracion');
+            if (compraTotal > 0 && (topProv / compraTotal) > 0.40) { score -= 15; concCheck.className = 'fa-solid fa-xmark text-red-500 w-4'; }
+            else { concCheck.className = 'fa-solid fa-check text-emerald-500 w-4'; }
+
+            const ahorros = variacionesCostosGlobales.filter(v => v.variacion <= -2).length;
+            const ahoCheck = document.getElementById('checkAhorro');
+            if (ahorros === 0) { score -= 5; ahoCheck.className = 'fa-solid fa-minus text-amber-500 w-4'; }
+            else { ahoCheck.className = 'fa-solid fa-check text-emerald-500 w-4'; }
+
+            const provCount = Object.keys(totalsProv).length;
+            const provCheck = document.getElementById('checkProveedores');
+            if (provCount < 3) { score -= 10; provCheck.className = 'fa-solid fa-xmark text-red-500 w-4'; }
+            else { provCheck.className = 'fa-solid fa-check text-emerald-500 w-4'; }
+
+            const devolTotal = Math.abs(filteredDataset.filter(i => i.entsal === 'S').reduce((s, i) => s + i.total, 0));
+            const devCheck = document.getElementById('checkDevoluciones');
+            if (compraTotal > 0 && (devolTotal / compraTotal) > 0.02) { score -= 10; devCheck.className = 'fa-solid fa-xmark text-red-500 w-4'; }
+            else { devCheck.className = 'fa-solid fa-check text-emerald-500 w-4'; }
+
+            score = Math.max(0, Math.round(score));
+
+            const scoreEl = document.getElementById('scoreValue');
+            const statusEl = document.getElementById('scoreStatus');
+            const circle = document.getElementById('scoreCircle');
+
+            scoreEl.innerText = score;
+
+            let color, label, textClass;
+            if (score >= 90) { color = '#10b981'; label = '🟢 Excelente'; textClass = 'text-emerald-500'; }
+            else if (score >= 70) { color = '#f59e0b'; label = '🟡 Regular'; textClass = 'text-amber-500'; }
+            else { color = '#f43f5e'; label = '🔴 Riesgo'; textClass = 'text-rose-500'; }
+
+            statusEl.innerHTML = label;
+            statusEl.className = `text-xl font-bold ${textClass} flex items-center gap-2`;
+            circle.style.setProperty('--score', score);
+            circle.style.setProperty('--score-color', color);
+        }
+
+        // ==========================================
+        // FORECAST TENDENCIA
+        // ==========================================
+        function renderForecast() {
+            const mesTotals = Array(12).fill(0);
+            filteredDataset.forEach(i => { if (i.mes >= 1 && i.mes <= 12) mesTotals[i.mes - 1] += i.total; });
+
+            let lastActiveMonth = -1;
+            for (let i = 11; i >= 0; i--) {
+                if (mesTotals[i] > 0) { lastActiveMonth = i; break; }
+            }
+
+            const container = document.getElementById('forecastCards');
+
+            if (lastActiveMonth < 1) {
+                container.innerHTML = `<div class="col-span-3 text-sm text-slate-400 text-center py-4">No hay datos suficientes para proyectar tendencia.</div>`;
+                return;
+            }
+
+            let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+            let n = lastActiveMonth + 1;
+
+            for (let i = 0; i <= lastActiveMonth; i++) {
+                let x = i + 1;
+                let y = mesTotals[i];
+                sumX += x; sumY += y; sumXY += (x * y); sumX2 += (x * x);
+            }
+
+            const denom = (n * sumX2 - sumX * sumX);
+            const pendiente_m = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0;
+            const interseccion_b = (sumY - pendiente_m * sumX) / n;
+
+            let htmlCards = '';
+            for (let k = 1; k <= 3; k++) {
+                let nextMonthIndex = (lastActiveMonth + k) % 12;
+                let mesNombre = MESES_NOMBRES[nextMonthIndex];
+                let projection = (pendiente_m * (lastActiveMonth + 1 + k)) + interseccion_b;
+
+                if (projection < 0) projection = sumY / n;
+
+                let trendIcon = pendiente_m > 0 ? '<i class="fa-solid fa-arrow-trend-up text-red-500"></i>' : '<i class="fa-solid fa-arrow-trend-down text-emerald-500"></i>';
+
+                htmlCards += `
+                    <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 text-center relative overflow-hidden">
+                        <p class="text-xs font-bold text-slate-400 uppercase">${mesNombre}</p>
+                        <h4 class="text-lg font-black text-slate-700 mt-1 font-mono tabular-nums">${formatMoney(projection)}</h4>
+                        <span class="text-[10px] text-slate-500 flex justify-center items-center gap-1 mt-1">${trendIcon} Proyección</span>
+                    </div>
+                `;
+            }
+            container.innerHTML = htmlCards;
+        }
+
+        // ==========================================
+        // HEATMAP (MATERIAL VS MES)
+        // ==========================================
+        function renderHeatmap() {
+            // Con búsqueda activa se agrega solo sobre las filas que
+            // coinciden (por proveedor, familia, grupo o material), así que
+            // los montos mostrados reflejan lo relacionado a la búsqueda.
+            const source = searchTerm ? matchingDataset : filteredDataset;
+            const matGasto = {};
+            source.forEach(i => matGasto[i.material] = (matGasto[i.material] || 0) + i.total);
+
+            const hint = document.getElementById('heatmapHint');
+            let topMats;
+            if (searchTerm) {
+                topMats = Object.entries(matGasto).sort((a, b) => b[1] - a[1]).slice(0, 12).map(x => x[0]);
+                hint.innerText = topMats.length > 0
+                    ? `Mientras más rojo, más gasto · ${topMats.length} material(es) relacionado(s) con "${searchTerm}"`
+                    : `Sin materiales relacionados con "${searchTerm}"`;
+            } else {
+                topMats = Object.entries(matGasto).sort((a, b) => b[1] - a[1]).slice(0, 10).map(x => x[0]);
+                hint.innerText = 'Mientras más rojo, más gasto · Top 10 materiales';
+            }
+
+            const matrix = {};
+            topMats.forEach(m => matrix[m] = Array(12).fill(0));
+            let globalMax = 0;
+
+            source.forEach(i => {
+                if (topMats.includes(i.material) && i.mes >= 1 && i.mes <= 12) {
+                    matrix[i.material][i.mes - 1] += i.total;
+                }
+            });
+            topMats.forEach(m => matrix[m].forEach(val => { if (val > globalMax) globalMax = val; }));
+
+            const tbody = document.getElementById('heatmapBody');
+            let html = '';
+
+            topMats.forEach(m => {
+                html += `<tr class="border-b border-slate-100">`;
+                html += `<td class="p-2 text-left font-medium text-slate-700 truncate max-w-[150px]" title="${esc(m)}">${esc(m)}</td>`;
+
+                for (let i = 0; i < 12; i++) {
+                    let val = matrix[m][i];
+                    let ratio = globalMax > 0 ? (val / globalMax) : 0;
+                    let bgColor = ratio > 0 ? `rgba(239, 68, 68, ${Math.max(0.1, ratio)})` : 'transparent';
+                    let textColor = ratio > 0.5 ? 'text-white' : 'text-slate-600';
+                    let formattedVal = val > 0 ? `$${(val / 1000).toFixed(1)}k` : '-';
+
+                    html += `<td class="p-2 text-[10px] heatmap-cell ${textColor}" style="background-color: ${bgColor}; font-weight: ${ratio > 0 ? 600 : 400};">${formattedVal}</td>`;
+                }
+                html += `</tr>`;
+            });
+
+            tbody.innerHTML = html || `<tr><td colspan="13" class="p-4 text-center text-slate-400">Sin datos para mostrar.</td></tr>`;
+        }
+
+        // ==========================================
+        // GRÁFICAS: FAMILIAS Y GRUPOS
+        // ==========================================
+        function renderComprasFamiliaChart() {
+            const familiaTotals = {};
+            filteredDataset.forEach(i => familiaTotals[i.familia] = (familiaTotals[i.familia] || 0) + i.total);
+            const sorted = Object.entries(familiaTotals).sort((a, b) => b[1] - a[1]);
+
+            getOrCreateChart('chartComprasFamilia', 'bar', {
+                labels: sorted.map(i => i[0]),
+                datasets: [{ label: 'Compra Total ($)', data: sorted.map(i => i[1]), backgroundColor: '#3b82f6', borderRadius: 6 }]
+            }, {
+                responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { callback: truncatedTickCallback(15), maxRotation: 45, minRotation: 0 } },
+                    y: { ticks: { callback: v => '$' + (v / 1e6).toFixed(1) + 'M' } }
+                }
+            });
+        }
+
+        function renderTopGruposChart() {
+            const grupoTotals = {};
+            filteredDataset.forEach(i => grupoTotals[i.grupo] = (grupoTotals[i.grupo] || 0) + i.total);
+            const sorted = Object.entries(grupoTotals).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+            getOrCreateChart('chartTopGrupos', 'bar', {
+                labels: sorted.map(i => i[0]),
+                datasets: [{ label: 'Compra Total ($)', data: sorted.map(i => i[1]), backgroundColor: '#10b981', borderRadius: 6 }]
+            }, {
+                indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+                scales: {
+                    y: { ticks: { callback: truncatedTickCallback(15) } },
+                    x: { ticks: { callback: v => '$' + (v / 1e6).toFixed(1) + 'M' } }
+                }
+            });
+        }
+
+        // ==========================================
+        // CLASIFICACIONES ABC (PROVEEDORES Y MATERIALES)
+        // ==========================================
+        // matchSet = nombres (de la dimensión "key") presentes en
+        // matchingDataset. Se usa para decidir qué filas MOSTRAR, pero el
+        // total y la clase A/B/C siempre se calculan sobre TODO el periodo,
+        // porque la clasificación ABC representa la importancia real de ese
+        // proveedor/material en el negocio, no solo su parte relacionada
+        // con la búsqueda.
+        function computeMatchSet(key) {
+            if (!searchTerm) return null;
+            return new Set(matchingDataset.map(item => item[key]));
+        }
+
+        function abcRowsHtml(sortedEntries, totalVal, matchSet) {
+            let acum = 0;
+            return sortedEntries.map(([name, val]) => {
+                acum += val;
+                const pct = totalVal > 0 ? (acum / totalVal) * 100 : 0;
+                let clase = 'C', badgeColor = 'bg-amber-100 text-amber-700 font-bold';
+                if (pct <= 80) { clase = 'A'; badgeColor = 'bg-emerald-100 text-emerald-700 font-bold'; }
+                else if (pct <= 95) { clase = 'B'; badgeColor = 'bg-blue-100 text-blue-700 font-bold'; }
+                return { name, val, clase, badgeColor, matches: !matchSet || matchSet.has(name) };
+            });
+        }
+
+        function renderABCClassification() {
+            // ABC Proveedores — la clasificación (A/B/C) se calcula sobre el
+            // 100% de los proveedores del periodo; la búsqueda solo filtra
+            // qué filas se muestran, para no alterar el % acumulado real.
+            const provTotals = {};
+            filteredDataset.forEach(i => provTotals[i.proveedor] = (provTotals[i.proveedor] || 0) + i.total);
+            const sortedProv = Object.entries(provTotals).sort((a, b) => b[1] - a[1]);
+            const totalProvVal = sortedProv.reduce((acc, curr) => acc + curr[1], 0);
+            const rowsProv = abcRowsHtml(sortedProv, totalProvVal, computeMatchSet('proveedor')).filter(r => r.matches);
+
+            document.getElementById('abcProvCount').innerText = `${formatNum(rowsProv.length)} de ${formatNum(sortedProv.length)}`;
+            document.getElementById('tableABCProveedores').innerHTML = rowsProv.length > 0
+                ? rowsProv.map(r => `
+                    <tr class="border-b hover:bg-slate-50">
+                        <td class="p-2 truncate max-w-[120px]" title="${esc(r.name)}">${esc(r.name)}</td>
+                        <td class="p-2 text-right font-mono">${formatMoney(r.val)}</td>
+                        <td class="p-2 text-center"><span class="px-2 py-0.5 rounded text-[10px] ${r.badgeColor}">${r.clase}</span></td>
+                    </tr>`).join('')
+                : `<tr><td colspan="3" class="p-4 text-center text-slate-400">${searchTerm ? 'Sin coincidencias.' : 'Sin datos.'}</td></tr>`;
+
+            // ABC Materiales
+            const matTotals = {};
+            filteredDataset.forEach(i => matTotals[i.material] = (matTotals[i.material] || 0) + i.total);
+            const sortedMat = Object.entries(matTotals).sort((a, b) => b[1] - a[1]);
+            const totalMatVal = sortedMat.reduce((acc, curr) => acc + curr[1], 0);
+            const rowsMat = abcRowsHtml(sortedMat, totalMatVal, computeMatchSet('material')).filter(r => r.matches);
+
+            document.getElementById('abcMatCount').innerText = `${formatNum(rowsMat.length)} de ${formatNum(sortedMat.length)}`;
+            document.getElementById('tableABCMateriales').innerHTML = rowsMat.length > 0
+                ? rowsMat.map(r => `
+                    <tr class="border-b hover:bg-slate-50">
+                        <td class="p-2 truncate max-w-[120px]" title="${esc(r.name)}">${esc(r.name)}</td>
+                        <td class="p-2 text-right font-mono">${formatMoney(r.val)}</td>
+                        <td class="p-2 text-center"><span class="px-2 py-0.5 rounded text-[10px] ${r.badgeColor}">${r.clase}</span></td>
+                    </tr>`).join('')
+                : `<tr><td colspan="3" class="p-4 text-center text-slate-400">${searchTerm ? 'Sin coincidencias.' : 'Sin datos.'}</td></tr>`;
+        }
+
+        // ==========================================
+        // DETALLE DE COMPRAS POR MES Y AÑO (Proveedor / Familia / Grupo / Material)
+        // ==========================================
+        const DESGLOSE_LABELS = { proveedor: 'Proveedor', familia: 'Familia', grupo: 'Grupo', material: 'Material' };
+        const DESGLOSE_MAX_ROWS = 60; // límite de filas renderizadas por desempeño; el buscador permite llegar a cualquiera
+
+        function setDesgloseTab(tab) {
+            desgloseTab = tab;
+            if (tab !== 'material') desgloseMetric = 'monto'; // el precio promedio solo aplica a Material
+            renderDesglosePeriodo();
+        }
+
+        function setDesgloseMetric(metric) {
+            desgloseMetric = metric;
+            renderDesglosePeriodo();
+        }
+
+        function renderDesglosePeriodo() {
+            const usaPrecio = desgloseTab === 'material' && desgloseMetric === 'precio';
+
+            // Interruptor Monto / Precio Promedio: solo visible en la pestaña Material
+            const metricToggle = document.getElementById('desgloseMetricToggle');
+            metricToggle.classList.toggle('hidden', desgloseTab !== 'material');
+            metricToggle.classList.toggle('flex', desgloseTab === 'material');
+            document.getElementById('metricBtnMonto').className = desgloseMetric === 'monto'
+                ? 'px-3 py-1.5 rounded-md bg-white shadow-sm text-slate-800 transition-colors'
+                : 'px-3 py-1.5 rounded-md text-slate-500 hover:text-slate-700 transition-colors';
+            document.getElementById('metricBtnPrecio').className = desgloseMetric === 'precio'
+                ? 'px-3 py-1.5 rounded-md bg-white shadow-sm text-slate-800 transition-colors'
+                : 'px-3 py-1.5 rounded-md text-slate-500 hover:text-slate-700 transition-colors';
+
+            // Estilo de pestañas activa/inactiva
+            ['proveedor', 'familia', 'grupo', 'material'].forEach(t => {
+                const btn = document.getElementById('tabBtn' + t.charAt(0).toUpperCase() + t.slice(1));
+                if (!btn) return;
+                btn.className = t === desgloseTab
+                    ? 'px-3 py-1.5 rounded-md bg-white shadow-sm text-slate-800 transition-colors'
+                    : 'px-3 py-1.5 rounded-md text-slate-500 hover:text-slate-700 transition-colors';
+            });
+            document.getElementById('desgloseColHead').innerText = DESGLOSE_LABELS[desgloseTab];
+            document.getElementById('desgloseTotalColHead').innerText = usaPrecio ? 'Precio Prom. Anual' : 'Total Anual';
+            document.getElementById('desgloseFootnote').innerText = usaPrecio
+                ? 'Precio promedio ponderado por unidad, en MXN (no incluye devoluciones) · pasa el cursor sobre una celda para ver el valor exacto.'
+                : 'Montos en MXN (pasa el cursor sobre una celda para ver el monto exacto) · usa el buscador de la barra superior para encontrar un proveedor, familia, grupo o material específico.';
+
+            // Con búsqueda activa se agrega solo sobre las filas que
+            // coinciden en cualquier campo (matchingDataset), así que un
+            // material buscado sí muestra su(s) proveedor(es), familia y
+            // grupo reales — antes se comparaba el término contra el nombre
+            // de CADA dimensión por separado y una búsqueda de material daba
+            // "0 de 0" en Proveedor/Familia aunque el dato sí existiera.
+            const source = searchTerm ? matchingDataset : filteredDataset;
+
+            const agg = {};
+            source.forEach(item => {
+                if (usaPrecio && item.entsal === 'S') return; // el precio promedio no debe incluir devoluciones
+                const k = item[desgloseTab];
+                if (!agg[k]) agg[k] = { meses: Array.from({ length: 12 }, () => ({ sumTotal: 0, sumCantidad: 0 })), total: 0, sumCantidad: 0 };
+                if (item.mes >= 1 && item.mes <= 12) {
+                    agg[k].meses[item.mes - 1].sumTotal += item.total;
+                    agg[k].meses[item.mes - 1].sumCantidad += item.cantidad;
+                }
+                agg[k].total += item.total;
+                agg[k].sumCantidad += item.cantidad;
+            });
+
+            // El orden de las filas se mantiene por gasto total (aun en modo
+            // Precio Promedio), para que cambiar de vista no reordene la tabla.
+            let entries = Object.entries(agg).sort((a, b) => b[1].total - a[1].total);
+            const matchedCount = entries.length;
+            entries = entries.slice(0, DESGLOSE_MAX_ROWS);
+
+            const countEl = document.getElementById('desgloseCount');
+            if (searchTerm) {
+                countEl.innerText = matchedCount > 0
+                    ? `${formatNum(entries.length)} de ${formatNum(matchedCount)} relacionado(s) con "${searchTerm}"`
+                    : `Sin resultados relacionados con "${searchTerm}"`;
+            } else {
+                countEl.innerText = matchedCount > DESGLOSE_MAX_ROWS
+                    ? `Top ${formatNum(entries.length)} de ${formatNum(matchedCount)} · ordenado por gasto total`
+                    : `${formatNum(matchedCount)} en total · ordenado por gasto total`;
+            }
+
+            const tbody = document.getElementById('desgloseBody');
+            if (entries.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="14" class="p-4 text-center text-slate-400">${searchTerm ? 'Sin resultados relacionados con tu búsqueda.' : 'Sin datos.'}</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = entries.map(([name, data]) => {
+                const cells = data.meses.map(m => {
+                    const val = usaPrecio
+                        ? (m.sumCantidad > 0 ? Math.abs(m.sumTotal / m.sumCantidad) : null)
+                        : (m.sumTotal !== 0 ? m.sumTotal : null);
+                    return val !== null
+                        ? `<td class="p-2 font-mono text-slate-600" title="${formatMoney(val)}">${formatMoneyCompact(val)}</td>`
+                        : `<td class="p-2 font-mono text-slate-300">-</td>`;
+                }).join('');
+
+                const totalVal = usaPrecio
+                    ? (data.sumCantidad > 0 ? Math.abs(data.total / data.sumCantidad) : 0)
+                    : data.total;
+
+                return `
+                    <tr class="border-b border-slate-100 hover:bg-slate-50">
+                        <td class="p-2 text-left font-medium text-slate-700 truncate max-w-[180px] sticky left-0 z-10 bg-white" title="${esc(name)}">${esc(name)}</td>
+                        ${cells}
+                        <td class="p-2 font-mono font-bold text-slate-800 bg-slate-50" title="${formatMoney(totalVal)}">${formatMoneyCompact(totalVal)}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // ==========================================
+        // COMPARADOR DE PRECIOS ENTRE PROVEEDORES
+        // ==========================================
+        // Para cada material comprado a 2+ proveedores en el periodo, calcula
+        // el precio promedio ponderado por proveedor y la dispersión entre el
+        // más barato y el más caro. Las devoluciones (ENTSAL='S') se excluyen
+        // porque no representan un precio de compra.
+        let comparadorCache = [];
+
+        function materialProviderStats(materialName) {
+            const byProv = {};
+            filteredDataset.forEach(item => {
+                if (item.material !== materialName || item.entsal === 'S' || item.cantidad === 0) return;
+                if (!byProv[item.proveedor]) byProv[item.proveedor] = { sumTotal: 0, sumCantidad: 0 };
+                byProv[item.proveedor].sumTotal += item.total;
+                byProv[item.proveedor].sumCantidad += item.cantidad;
+            });
+            return Object.entries(byProv)
+                .map(([proveedor, d]) => ({
+                    proveedor,
+                    precio: Math.abs(d.sumTotal / d.sumCantidad),
+                    cantidad: d.sumCantidad,
+                    total: d.sumTotal
+                }))
+                .sort((a, b) => a.precio - b.precio);
+        }
+
+        function computeOportunidades() {
+            const matProv = {};
+            filteredDataset.forEach(item => {
+                if (item.entsal === 'S' || item.cantidad === 0) return;
+                if (!matProv[item.material]) matProv[item.material] = {};
+                if (!matProv[item.material][item.proveedor]) matProv[item.material][item.proveedor] = { sumTotal: 0, sumCantidad: 0 };
+                matProv[item.material][item.proveedor].sumTotal += item.total;
+                matProv[item.material][item.proveedor].sumCantidad += item.cantidad;
+            });
+
+            const results = [];
+            Object.keys(matProv).forEach(mat => {
+                const provs = Object.keys(matProv[mat]);
+                if (provs.length < 2) return;
+                const precios = provs.map(p => Math.abs(matProv[mat][p].sumTotal / matProv[mat][p].sumCantidad));
+                const min = Math.min(...precios), max = Math.max(...precios);
+                if (min <= 0) return;
+                results.push({ material: mat, min, max, spreadPct: ((max - min) / min) * 100, numProveedores: provs.length });
+            });
+            return results.sort((a, b) => b.spreadPct - a.spreadPct);
+        }
+
+        function renderComparadorPanel() {
+            comparadorCache = computeOportunidades();
+            const input = document.getElementById('comparadorInput');
+            if (input) input.value = '';
+            hideComparadorSuggestions();
+            closeComparadorDetail();
+            renderComparadorOportunidadesCards();
+        }
+
+        function renderComparadorOportunidadesCards() {
+            const container = document.getElementById('comparadorOportunidades');
+            const top = comparadorCache.slice(0, 9);
+            if (top.length === 0) {
+                container.innerHTML = `<p class="text-xs text-slate-400 col-span-full">No se encontraron materiales comprados a más de un proveedor en el periodo seleccionado.</p>`;
+                return;
+            }
+            container.innerHTML = top.map((o, idx) => `
+                <button type="button" data-idx="${idx}" class="comparador-op-btn text-left bg-slate-50 hover:bg-teal-50 border border-slate-200 hover:border-teal-300 rounded-xl p-3 transition-colors">
+                    <p class="text-xs font-semibold text-slate-700 truncate" title="${esc(o.material)}">${esc(o.material)}</p>
+                    <p class="text-[10px] text-slate-400 mt-1">${formatNum(o.numProveedores)} proveedores</p>
+                    <p class="text-sm font-black text-rose-500 mt-1 font-mono">+${o.spreadPct.toFixed(0)}%</p>
+                    <p class="text-[10px] text-slate-500 font-mono">${formatMoney(o.min)} — ${formatMoney(o.max)}</p>
+                </button>
+            `).join('');
+            container.querySelectorAll('.comparador-op-btn').forEach(btn => {
+                btn.addEventListener('click', () => openComparadorMaterial(top[parseInt(btn.dataset.idx)].material));
+            });
+        }
+
+        function openComparadorMaterial(materialName) {
+            const stats = materialProviderStats(materialName);
+            document.getElementById('comparadorDefaultView').classList.add('hidden');
+            document.getElementById('comparadorDetailView').classList.remove('hidden');
+            document.getElementById('comparadorMaterialTitle').innerText = materialName;
+            document.getElementById('comparadorMaterialTitle').title = materialName;
+
+            const tbody = document.getElementById('comparadorTableBody');
+            if (stats.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-slate-400">Sin compras a más de un proveedor para este material en el periodo seleccionado.</td></tr>`;
+                return;
+            }
+            const minPrecio = stats[0].precio;
+            tbody.innerHTML = stats.map((s, i) => {
+                const isCheapest = i === 0;
+                const diffPct = minPrecio > 0 ? ((s.precio - minPrecio) / minPrecio) * 100 : 0;
+                const diffBadge = isCheapest
+                    ? `<span class="text-emerald-600 font-bold">Más barato</span>`
+                    : `<span class="text-rose-600 font-bold">+${diffPct.toFixed(1)}%</span>`;
+                return `
+                    <tr class="border-b hover:bg-slate-50 ${isCheapest ? 'bg-emerald-50/40' : ''}">
+                        <td class="p-2 truncate max-w-[220px]" title="${esc(s.proveedor)}">${esc(s.proveedor)}</td>
+                        <td class="p-2 text-right font-mono font-semibold">${formatMoney(s.precio)}</td>
+                        <td class="p-2 text-right font-mono">${formatNum(s.cantidad)}</td>
+                        <td class="p-2 text-right font-mono">${formatMoney(s.total)}</td>
+                        <td class="p-2 text-right">${diffBadge}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function closeComparadorDetail() {
+            document.getElementById('comparadorDetailView').classList.add('hidden');
+            document.getElementById('comparadorDefaultView').classList.remove('hidden');
+        }
+
+        function hideComparadorSuggestions() {
+            const box = document.getElementById('comparadorSuggestions');
+            box.classList.add('hidden');
+            box.innerHTML = '';
+        }
+
+        document.getElementById('comparadorInput').addEventListener('input', (e) => {
+            const val = e.target.value.trim().toUpperCase();
+            const box = document.getElementById('comparadorSuggestions');
+            if (!val) { hideComparadorSuggestions(); return; }
+
+            const matches = comparadorCache.filter(o => o.material.toUpperCase().includes(val)).slice(0, 8);
+            if (matches.length === 0) {
+                box.innerHTML = `<div class="p-3 text-xs text-slate-400">Sin materiales comparables (con más de un proveedor) para "${esc(e.target.value.trim())}".</div>`;
+                box.classList.remove('hidden');
+                return;
+            }
+            box.innerHTML = matches.map((o, idx) => `
+                <button type="button" data-idx="${idx}" class="comparador-sugg-btn w-full text-left px-3 py-2 text-xs hover:bg-slate-50 border-b border-slate-100 last:border-0">
+                    <span class="font-medium text-slate-700">${esc(o.material)}</span>
+                    <span class="text-slate-400"> · ${formatNum(o.numProveedores)} proveedores · dif. +${o.spreadPct.toFixed(0)}%</span>
+                </button>
+            `).join('');
+            box.classList.remove('hidden');
+            box.querySelectorAll('.comparador-sugg-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const chosen = matches[parseInt(btn.dataset.idx)];
+                    document.getElementById('comparadorInput').value = chosen.material;
+                    hideComparadorSuggestions();
+                    openComparadorMaterial(chosen.material);
+                });
+            });
+        });
+
+        document.addEventListener('click', (e) => {
+            const box = document.getElementById('comparadorSuggestions');
+            const input = document.getElementById('comparadorInput');
+            if (box && !box.contains(e.target) && e.target !== input) hideComparadorSuggestions();
+        });
+
+        // ==========================================
+        // UTILIDADES Y GRÁFICAS DE CHART.JS
+        // ==========================================
+        function getOrCreateChart(canvasId, type, data, options) {
+            if (chartInstances[canvasId]) chartInstances[canvasId].destroy();
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            chartInstances[canvasId] = new Chart(ctx, { type, data, options });
+            return chartInstances[canvasId];
+        }
+
+        function renderEvolucionMensualChart() {
+            const mensualImporte = Array(12).fill(0);
+            const mensualCantidad = Array(12).fill(0);
+            filteredDataset.forEach(item => {
+                if (item.mes >= 1 && item.mes <= 12) {
+                    mensualImporte[item.mes - 1] += item.total;
+                    mensualCantidad[item.mes - 1] += item.cantidad;
+                }
+            });
+
+            getOrCreateChart('chartEvolucionMensual', 'line', {
+                labels: MESES_NOMBRES,
+                datasets: [
+                    { label: 'Importe ($)', data: mensualImporte, borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.1)', yAxisID: 'y', tension: 0.3, fill: true },
+                    { label: 'Cantidad', data: mensualCantidad, borderColor: '#f97316', backgroundColor: 'transparent', borderDash: [5, 5], yAxisID: 'y1', tension: 0.3 }
+                ]
+            }, {
+                responsive: true, maintainAspectRatio: false,
+                scales: {
+                    y: { type: 'linear', position: 'left', ticks: { callback: v => '$' + (v / 1e6).toFixed(1) + 'M' } },
+                    y1: { type: 'linear', position: 'right', ticks: { callback: v => formatNum(v) }, grid: { drawOnChartArea: false } }
+                }
+            });
+        }
+
+        function renderMonedaChart() {
+            const monedaTotals = {};
+            filteredDataset.forEach(i => monedaTotals[i.moneda] = (monedaTotals[i.moneda] || 0) + i.total);
+            getOrCreateChart('chartMoneda', 'doughnut', {
+                labels: Object.keys(monedaTotals),
+                datasets: [{ data: Object.values(monedaTotals), backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'] }]
+            }, {
+                responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } }
+            });
+        }
+
+        function renderMezclaFamiliasChart() {
+            const famTotals = {};
+            filteredDataset.forEach(i => famTotals[i.familia] = (famTotals[i.familia] || 0) + i.total);
+            const top5Familias = Object.entries(famTotals).sort((a, b) => b[1] - a[1]).slice(0, 5).map(i => i[0]);
+
+            const colors = ['#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b'];
+            const datasets = top5Familias.map((fam, idx) => ({
+                label: truncate(fam, 15),
+                data: Array(12).fill(0), backgroundColor: colors[idx % colors.length]
+            }));
+
+            const otrosData = { label: 'Otros', data: Array(12).fill(0), backgroundColor: '#cbd5e1' };
+
+            filteredDataset.forEach(i => {
+                if (i.mes >= 1 && i.mes <= 12) {
+                    const famIndex = top5Familias.indexOf(i.familia);
+                    if (famIndex !== -1) datasets[famIndex].data[i.mes - 1] += i.total;
+                    else otrosData.data[i.mes - 1] += i.total;
+                }
+            });
+            datasets.push(otrosData);
+
+            getOrCreateChart('chartMezclaFamilias', 'bar', {
+                labels: MESES_NOMBRES, datasets: datasets
+            }, {
+                responsive: true, maintainAspectRatio: false,
+                scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: v => '$' + (v / 1e6).toFixed(1) + 'M' } } },
+                plugins: { legend: { position: 'bottom' } }
+            });
+        }
+
+        function renderTopProveedoresChart() {
+            const provTotals = {};
+            filteredDataset.forEach(i => provTotals[i.proveedor] = (provTotals[i.proveedor] || 0) + i.total);
+            const sorted = Object.entries(provTotals).sort((a, b) => b[1] - a[1]).slice(0, 10);
+            getOrCreateChart('chartTopProveedores', 'bar', {
+                labels: sorted.map(i => i[0]),
+                datasets: [{ label: 'Compra Total ($)', data: sorted.map(i => i[1]), backgroundColor: '#1e293b', borderRadius: 6 }]
+            }, {
+                indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+                scales: {
+                    y: { ticks: { callback: truncatedTickCallback(20) } },
+                    x: { ticks: { callback: v => '$' + (v / 1e6).toFixed(1) + 'M' } }
+                }
+            });
+        }
+
+        function renderParetoMaterialesChart() {
+            const matTotals = {};
+            filteredDataset.forEach(i => matTotals[i.material] = (matTotals[i.material] || 0) + i.total);
+            const sorted = Object.entries(matTotals).sort((a, b) => b[1] - a[1]).slice(0, 20);
+            const total = Object.values(matTotals).reduce((a, b) => a + b, 0);
+            let acum = 0;
+            const acumuladoPct = sorted.map(i => { acum += i[1]; return total > 0 ? ((acum / total) * 100).toFixed(1) : 0; });
+
+            getOrCreateChart('chartParetoMateriales', 'bar', {
+                labels: sorted.map(i => i[0]),
+                datasets: [
+                    { type: 'line', label: '% Acumulado', data: acumuladoPct, borderColor: '#ef4444', backgroundColor: '#ef4444', yAxisID: 'y1' },
+                    { type: 'bar', label: 'Importe ($)', data: sorted.map(i => i[1]), backgroundColor: '#0d9488', yAxisID: 'y', borderRadius: 4 }
+                ]
+            }, {
+                responsive: true, maintainAspectRatio: false,
+                scales: {
+                    x: { ticks: { callback: truncatedTickCallback(15), maxRotation: 60, minRotation: 0 } },
+                    y: { type: 'linear', position: 'left', ticks: { callback: v => '$' + (v / 1e6).toFixed(1) + 'M' } },
+                    y1: { type: 'linear', position: 'right', max: 100, ticks: { callback: v => v + '%' }, grid: { drawOnChartArea: false } }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
