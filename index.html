@@ -59,6 +59,10 @@ input[type=text],input[type=number],input[type=date],select,textarea{width:100%;
 .line .nm{flex:1;font-weight:700;line-height:1.2}
 .line .nm small{display:block;font-weight:400;color:var(--muted);font-size:13px}
 .line .pr{font-weight:800;min-width:70px;text-align:right}
+.pricebtn{min-height:36px;min-width:78px;padding:2px 8px;background:#fff;border:2px dashed #d9c98f;border-radius:10px;font-weight:800;line-height:1.15;text-align:right;color:var(--ink)}
+.pricebtn small{display:block;font-weight:400;color:var(--muted);font-size:11px}
+.pricebtn.ed{border-color:var(--accent);color:var(--accent)}
+.b-px{background:var(--accent)}
 .qty{display:flex;align-items:center;gap:4px}
 .qty button{min-height:34px;width:34px;padding:0;font-size:20px;border-radius:10px}
 .qty span{min-width:22px;text-align:center;font-weight:800}
@@ -121,7 +125,7 @@ input[type=text],input[type=number],input[type=date],select,textarea{width:100%;
   <div class="tabs" id="tabs">
     <button class="tab on" data-v="nueva">Nueva</button>
     <button class="tab" data-v="lista">Del día<span class="dot" id="dot-pend" style="display:none"></span></button>
-    <button class="tab" data-v="cierre">Cierre</button>
+    <button class="tab" data-v="cierre">Cierre<span class="dot" id="dot-cierre" style="display:none"></span></button>
     <button class="tab" data-v="ajustes">Ajustes</button>
   </div>
 </div>
@@ -167,11 +171,11 @@ input[type=text],input[type=number],input[type=date],select,textarea{width:100%;
       </div>
       <div class="stat" id="lista-stat" style="margin-top:10px"></div>
       <div class="chips" id="lista-filter" style="margin-bottom:10px">
-        <button class="chip on" data-s="ALL">Todas</button>
-        <button class="chip" data-s="PENDIENTE">Pendientes</button>
-        <button class="chip" data-s="COBRADA">Cobradas</button>
+        <button class="chip on" data-s="PENDIENTE">Por cobrar</button>
         <button class="chip" data-s="CANCELADA">Canceladas</button>
+        <button class="chip" data-s="ALL">Todas</button>
       </div>
+      <p class="hint" style="margin:0 0 10px">Al cobrar una comanda sale de esta lista y pasa a la pestaña <b>Cierre</b>.</p>
       <div id="lista-body"></div>
     </div>
   </section>
@@ -230,6 +234,8 @@ input[type=text],input[type=number],input[type=date],select,textarea{width:100%;
 
 <!-- Picker de producto -->
 <div class="ov hi" id="ov-pick"><div class="sheet" id="pick-sheet"></div></div>
+<!-- Cambiar precio de una línea -->
+<div class="ov hi" id="ov-price"><div class="sheet" id="price-sheet"></div></div>
 <!-- Catálogo (para agregar al ajustar) -->
 <div class="ov mid" id="ov-cat"><div class="sheet">
   <h3>Agregar producto</h3>
@@ -257,7 +263,8 @@ const APP_VERSION = 1;
 
 let state = { catalog: clone(DEFAULT_CATALOG), comandas: [], counters: {}, settings: { paperMm: 80, business: 'LINAJE DEL SABOR' }, catalogSource: 'Catálogo de fábrica' };
 let draft = { items: [], type: 'LOCAL', label: '', note: '' };
-let catFilter = 'all', cat2Filter = 'all', listaFilter = 'ALL';
+let catFilter = 'all', cat2Filter = 'all', listaFilter = 'PENDIENTE';
+let priceCtx = null;
 let pickCtx = null;      // {prodId, target, variant, stews[], flavor, qty}
 let cobroCtx = null;     // {id, items[], service, method, cash, card, transfer, received}
 let previewId = null;
@@ -407,19 +414,63 @@ function linesHtml(list, target){
     const sz = showSize(i) ? ' · ' + esc(i.size) : '';
     return '<div class="line"><div class="nm">' + esc(i.productName) + sz + (sub.length ? '<small>' + sub.map(esc).join(' · ') + '</small>' : '') + '</div>' +
       '<div class="qty"><button data-a="m" data-i="' + idx + '">−</button><span>' + i.quantity + '</span><button data-a="p" data-i="' + idx + '">+</button></div>' +
-      '<div class="pr">' + money(i.priceWithTax * i.quantity) + '</div>' +
+      '<button class="pricebtn' + (i.priceEdited ? ' ed' : '') + '" data-a="price" data-i="' + idx + '" title="Cambiar precio">' + money(i.priceWithTax * i.quantity) +
+        '<small>' + (i.quantity > 1 || i.priceEdited ? money(i.priceWithTax) + ' c/u' : 'editar precio') + (i.priceEdited ? ' ✎' : '') + '</small></button>' +
       '<button class="sm bad" style="min-height:34px;padding:0 9px" data-a="x" data-i="' + idx + '">✕</button></div>';
   }).join('');
 }
 function bindLines(root, list, target){
   root.querySelectorAll('button[data-a]').forEach(b => b.onclick = () => {
     const i = +b.dataset.i, it = list[i]; if (!it) return;
+    if (b.dataset.a === 'price') { openPrice(list, i, target); return; }
     if (b.dataset.a === 'p') it.quantity++;
     else if (b.dataset.a === 'm') { it.quantity--; if (it.quantity <= 0) list.splice(i, 1); }
     else list.splice(i, 1);
     afterChange(target);
   });
 }
+/* ---------- Precio editable por línea ---------- */
+function openPrice(list, i, target){
+  const it = list[i]; if (!it) return;
+  priceCtx = { list, i, target };
+  const cat = it.catalogPrice != null ? it.catalogPrice : it.priceWithTax;
+  const sub = itemSubLines(it);
+  $('price-sheet').innerHTML =
+    '<h3>Cambiar precio</h3><div style="font-weight:700">' + esc(it.productName) + (showSize(it) ? ' · ' + esc(it.size) : '') + '</div>' +
+    (sub.length ? '<div class="hint">' + sub.map(esc).join(' · ') + '</div>' : '') +
+    '<div class="hint" style="margin-top:6px">Precio de catálogo: <b>' + money(cat) + '</b> c/u · Cantidad: <b>' + it.quantity + '</b></div>' +
+    '<label class="f" for="px-in">Precio por pieza (c/u)</label>' +
+    '<input type="number" inputmode="decimal" step="0.5" min="0" id="px-in" value="' + it.priceWithTax + '">' +
+    '<div class="row wrap" style="margin-top:8px"><button class="sm" data-add="5">+ $5</button><button class="sm" data-add="10">+ $10</button><button class="sm" data-add="-5">− $5</button><button class="sm ghost" id="px-cat">Precio de catálogo</button></div>' +
+    '<div class="total" style="margin-bottom:8px"><span>Total de la línea</span><span id="px-total">' + money(it.priceWithTax * it.quantity) + '</span></div>' +
+    '<div class="row"><button class="ok sp" id="px-save">Guardar precio</button><button class="ghost" id="px-cancel">Cancelar</button></div>';
+  const inp = $('px-in'), upd = () => { $('px-total').textContent = money((parseFloat(inp.value) || 0) * it.quantity); };
+  inp.oninput = upd;
+  $('price-sheet').querySelectorAll('[data-add]').forEach(b => b.onclick = () => { inp.value = Math.max(0, (parseFloat(inp.value) || 0) + parseFloat(b.dataset.add)); upd(); });
+  $('px-cat').onclick = () => { inp.value = cat; upd(); };
+  $('px-cancel').onclick = closePrice;
+  $('px-save').onclick = applyPrice;
+  $('ov-price').classList.add('show');
+  setTimeout(() => { try { inp.focus(); inp.select(); } catch(e){} }, 60);
+}
+function closePrice(){ $('ov-price').classList.remove('show'); priceCtx = null; }
+function applyPrice(){
+  const x = priceCtx; if (!x) return;
+  const it = x.list[x.i]; if (!it) { closePrice(); return; }
+  const np = Math.round((parseFloat($('px-in').value)) * 100) / 100;
+  if (!isFinite(np) || np < 0) { toast('Escribe un precio válido'); return; }
+  if (it.catalogPrice == null) it.catalogPrice = it.priceWithTax;
+  const base = String(it.key).split('|p')[0];
+  it.priceWithTax = np;
+  it.priceEdited = Math.abs(np - it.catalogPrice) > 0.001;
+  it.key = it.priceEdited ? base + '|p' + np.toFixed(2) : base;
+  // si ya existe otra línea idéntica (mismo producto y mismo precio) se unen
+  const j = x.list.findIndex((o, idx) => idx !== x.i && o.key === it.key);
+  if (j > -1) { it.quantity += x.list[j].quantity; x.list.splice(j, 1); }
+  const t = x.target; closePrice(); afterChange(t);
+  toast(it.priceEdited ? 'Precio ajustado: ' + money(np) + ' c/u' : 'Precio de catálogo restablecido');
+}
+
 function nextNum(day){
   // Nunca se reutiliza un folio del día aunque se borre la comanda: el folio (fecha+número) es
   // la llave con la que el POS evita duplicar ventas, así que debe ser único para siempre.
@@ -472,6 +523,7 @@ function ticketHtml(c){
     const sz = showSize(i) ? ' ' + esc(i.size) : '';
     h += '<div class="ln"><span>' + i.quantity + ' x ' + esc(i.productName) + sz + '</span><span>' + money(i.priceWithTax * i.quantity) + '</span></div>';
     itemSubLines(i).forEach(s => h += '<div class="sub">- ' + esc(s) + '</div>');
+    if (i.priceEdited) h += '<div class="sub">* Precio ajustado: ' + money(i.priceWithTax) + ' c/u</div>';
   });
   h += '<hr>';
   if (c.note) h += '<div>NOTA: ' + esc(c.note) + '</div><hr>';
@@ -497,56 +549,77 @@ function openPreview(id){
 }
 
 /* ---------- Lista del día ---------- */
-function itemsSummary(list){ return list.map(i => i.quantity + ' ' + i.productName + (i.stews && i.stews.length ? ' (' + i.stews.join(', ') + ')' : '') + (i.flavor ? ' (' + i.flavor + ')' : '')).join(' · '); }
+function itemsSummary(list){ return list.map(i => i.quantity + ' ' + i.productName + (i.stews && i.stews.length ? ' (' + i.stews.join(', ') + ')' : '') + (i.flavor ? ' (' + i.flavor + ')' : '') + (i.priceEdited ? ' [' + money(i.priceWithTax) + ' c/u]' : '')).join(' · '); }
 function diffOf(c){
   const o = {}, n = {};
   (c.originalItems || []).forEach(i => o[i.key] = i);
   c.items.forEach(i => n[i.key] = i);
   const out = [];
-  Object.keys(n).forEach(k => { const a = o[k] ? o[k].quantity : 0, b = n[k].quantity; if (b > a) out.push({ s: '+', t: (b - a) + ' ' + n[k].displayName }); });
-  Object.keys(o).forEach(k => { const a = o[k].quantity, b = n[k] ? n[k].quantity : 0; if (a > b) out.push({ s: '−', t: (a - b) + ' ' + o[k].displayName }); });
+  // si un producto cambió de precio, se muestra el precio en ambos renglones para que se entienda
+  const edited = new Set(c.items.filter(i => i.priceEdited).map(i => i.displayName));
+  (c.originalItems || []).forEach(i => { if (i.priceEdited) edited.add(i.displayName); });
+  const lbl = i => i.displayName + (i.priceEdited || edited.has(i.displayName) ? ' [' + money(i.priceWithTax) + ' c/u]' : '');
+  Object.keys(n).forEach(k => { const a = o[k] ? o[k].quantity : 0, b = n[k].quantity; if (b > a) out.push({ s: '+', t: (b - a) + ' ' + lbl(n[k]) }); });
+  Object.keys(o).forEach(k => { const a = o[k].quantity, b = n[k] ? n[k].quantity : 0; if (a > b) out.push({ s: '−', t: (a - b) + ' ' + lbl(o[k]) }); });
   return out;
 }
 function isAdjusted(c){ return diffOf(c).length > 0; }
 function updateDot(){
   const n = state.comandas.filter(c => c.status === 'PENDIENTE').length;
   const d = $('dot-pend'); d.style.display = n ? 'block' : 'none'; d.textContent = n;
+  const m = state.comandas.filter(c => c.status === 'COBRADA' && !c.exportedAt).length;
+  const e = $('dot-cierre'); if (e) { e.style.display = m ? 'block' : 'none'; e.textContent = m; }
 }
 function renderLista(){
   const day = $('lista-date').value || dateStr();
   const all = state.comandas.filter(c => c.rawDate === day).sort((a, b) => b.num - a.num);
   const pend = all.filter(c => c.status === 'PENDIENTE'), ok = all.filter(c => c.status === 'COBRADA');
   $('lista-stat').innerHTML =
-    '<div><b>' + pend.length + '</b><small>pendientes</small></div><div><b>' + ok.length + '</b><small>cobradas</small></div>' +
-    '<div><b>' + money(ok.reduce((s, c) => s + c.total, 0)) + '</b><small>cobrado</small></div>' +
-    '<div><b>' + money(pend.reduce((s, c) => s + listTotal(c.items), 0)) + '</b><small>por cobrar</small></div>';
+    '<div><b>' + pend.length + '</b><small>por cobrar</small></div><div><b>' + money(pend.reduce((s, c) => s + listTotal(c.items), 0)) + '</b><small>pendiente de cobro</small></div>' +
+    '<div><b>' + ok.length + '</b><small>cobradas (en Cierre)</small></div><div><b>' + money(ok.reduce((s, c) => s + c.total, 0)) + '</b><small>cobrado</small></div>';
   $('lista-filter').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.s === listaFilter));
   const rows = all.filter(c => listaFilter === 'ALL' || c.status === listaFilter);
   const canc = all.filter(c => c.status === 'CANCELADA');
   const bulk = canc.length ? '<div class="row" style="margin-bottom:10px"><button class="sm bad" id="btn-del-canc">Eliminar las ' + canc.length + ' cancelada(s) de este día</button></div>' : '';
-  if (!rows.length) { $('lista-body').innerHTML = bulk + '<div class="empty">No hay comandas con ese filtro</div>'; bindBulk(canc); return; }
-  $('lista-body').innerHTML = bulk + rows.map(c => {
-    const d = new Date(c.createdAt), hora = pad(d.getHours(),2) + ':' + pad(d.getMinutes(),2);
-    const st = c.status === 'PENDIENTE' ? '<span class="badge b-pend">PENDIENTE</span>' : c.status === 'COBRADA' ? '<span class="badge b-ok">COBRADA</span>' : '<span class="badge b-can">CANCELADA</span>';
-    const adj = isAdjusted(c) ? ' <span class="badge b-adj">' + (c.status === 'PENDIENTE' ? 'CAMBIOS SIN IMPRIMIR' : 'AJUSTADA') + '</span>' : '';
-    const exp = c.exportedAt ? ' <span class="badge b-can">EXPORTADA</span>' : '';
-    let btns = '<button class="sm" data-act="view" data-id="' + c.id + '">Ver / imprimir</button>';
-    if (c.status === 'PENDIENTE') btns += '<button class="sm ok" data-act="cobro" data-id="' + c.id + '">Editar / cobrar</button><button class="sm bad" data-act="cancel" data-id="' + c.id + '">Cancelar</button>';
-    if (c.status === 'COBRADA') btns += '<button class="sm ghost" data-act="cobro" data-id="' + c.id + '">Detalle' + (c.exportedAt ? '' : ' / corregir') + '</button>';
-    btns += '<button class="sm bad" data-act="del" data-id="' + c.id + '">Eliminar</button>';
-    return '<div class="cm"><div class="h"><span class="folio">#' + pad(c.num, 3) + '</span><b>' + typeLabel(c.type) + (c.label ? ' · ' + esc(c.label) : '') + '</b><span class="hint">' + hora + '</span><span class="sp"></span>' + st + adj + exp + '</div>' +
-      '<div class="items">' + esc(itemsSummary(c.items)) + '</div>' +
-      '<div class="row wrap"><b style="font-size:19px;color:var(--primary)">' + money(c.status === 'COBRADA' ? c.total : listTotal(c.items)) + '</b><span class="sp"></span>' + btns + '</div></div>';
-  }).join('');
+  if (!rows.length) { $('lista-body').innerHTML = bulk + '<div class="empty">' + (listaFilter === 'PENDIENTE' ? (ok.length ? '✓ No hay comandas por cobrar' : 'No hay comandas por cobrar') : 'No hay comandas con ese filtro') + '</div>'; bindBulk(canc); return; }
+  $('lista-body').innerHTML = bulk + rows.map(c => comandaCard(c)).join('');
   bindBulk(canc);
-  $('lista-body').querySelectorAll('button[data-act]').forEach(b => b.onclick = () => {
+  bindCards($('lista-body'));
+}
+function payLabel(c){
+  if (c.service === 'CORTESIA') return 'CORTESÍA';
+  const p = [];
+  if (c.cash > 0) p.push('Efectivo ' + money(c.cash));
+  if (c.card > 0) p.push('Tarjeta ' + money(c.card));
+  if (c.transfer > 0) p.push('Transf. ' + money(c.transfer));
+  return p.join(' + ') || 'Efectivo';
+}
+function comandaCard(c){
+  const hh = s => { const d = new Date(s); return pad(d.getHours(),2) + ':' + pad(d.getMinutes(),2); };
+  const st = c.status === 'PENDIENTE' ? '<span class="badge b-pend">PENDIENTE</span>' : c.status === 'COBRADA' ? '<span class="badge b-ok">COBRADA</span>' : '<span class="badge b-can">CANCELADA</span>';
+  const adj = isAdjusted(c) ? ' <span class="badge b-adj">' + (c.status === 'PENDIENTE' ? 'CAMBIOS SIN IMPRIMIR' : 'AJUSTADA') + '</span>' : '';
+  const px = c.items.some(i => i.priceEdited) ? ' <span class="badge b-px">PRECIO AJUSTADO</span>' : '';
+  const exp = c.exportedAt ? ' <span class="badge b-can">EXPORTADA</span>' : '';
+  let btns = '<button class="sm" data-act="view" data-id="' + c.id + '">Ver / imprimir</button>';
+  if (c.status === 'PENDIENTE') btns += '<button class="sm ok" data-act="cobro" data-id="' + c.id + '">Editar / cobrar</button><button class="sm bad" data-act="cancel" data-id="' + c.id + '">Cancelar</button>';
+  if (c.status === 'COBRADA') btns += '<button class="sm ghost" data-act="cobro" data-id="' + c.id + '">Detalle' + (c.exportedAt ? '' : ' / corregir') + '</button>';
+  btns += '<button class="sm bad" data-act="del" data-id="' + c.id + '">Eliminar</button>';
+  const when = c.status === 'COBRADA' && c.paidAt ? 'creada ' + hh(c.createdAt) + ' · cobrada ' + hh(c.paidAt) : hh(c.createdAt);
+  return '<div class="cm"><div class="h"><span class="folio">#' + pad(c.num, 3) + '</span><b>' + typeLabel(c.type) + (c.label ? ' · ' + esc(c.label) : '') + '</b><span class="hint">' + when + '</span><span class="sp"></span>' + st + adj + px + exp + '</div>' +
+    '<div class="items">' + esc(itemsSummary(c.items)) + '</div>' +
+    (c.status === 'COBRADA' ? '<div class="hint" style="margin-bottom:4px">Pago: ' + esc(payLabel(c)) + '</div>' : '') +
+    '<div class="row wrap"><b style="font-size:19px;color:var(--primary)">' + money(c.status === 'COBRADA' ? c.total : listTotal(c.items)) + '</b><span class="sp"></span>' + btns + '</div></div>';
+}
+function refreshAll(){ renderLista(); renderCierre(); updateDot(); }
+function bindCards(root){
+  root.querySelectorAll('button[data-act]').forEach(b => b.onclick = () => {
     const id = b.dataset.id, a = b.dataset.act;
     if (a === 'view') openPreview(id);
     else if (a === 'cobro') openCobro(id);
     else if (a === 'del') deleteComanda(id);
     else if (a === 'cancel') {
       if (confirm('¿Cancelar la comanda #' + id.split('-')[1] + '? No se exportará al POS.')) {
-        const c = state.comandas.find(x => x.id === id); c.status = 'CANCELADA'; save(); renderLista(); updateDot();
+        const c = state.comandas.find(x => x.id === id); c.status = 'CANCELADA'; save(); refreshAll();
       }
     }
   });
@@ -671,7 +744,7 @@ function saveCobro(){
   c.cash = cash; c.card = card; c.transfer = transfer; c.change = change;
   c.status = 'COBRADA'; c.paidAt = c.paidAt || new Date().toISOString();
   if (!c.printedAt) c.originalItems = clone(c.items);
-  save(); toast('Comanda #' + pad(c.num, 3) + ' cobrada: ' + money(total)); closeCobro(true);
+  save(); toast('Comanda #' + pad(c.num, 3) + ' cobrada: ' + money(total) + ' · pasó a Cierre'); closeCobro(true);
 }
 function renderCat2(){
   renderChips($('cat2-chips'), cat2Filter, id => { cat2Filter = id; renderCat2(); });
@@ -689,11 +762,15 @@ function renderCierre(){
   if (pend.length) h += '<div class="alert"><b>Hay ' + pend.length + ' comanda(s) sin cobrar</b> (folios ' + pend.map(c => '#' + pad(c.num, 3)).join(', ') + '). Cóbralas o cancélalas antes de exportar, o se quedarán fuera.</div>';
   h += '<div class="stat"><div><b>' + ok.length + '</b><small>cobradas</small></div><div><b>' + money(ok.reduce((s, c) => s + c.total, 0)) + '</b><small>total cobrado</small></div>' +
        '<div><b>' + money(sum('cash')) + '</b><small>efectivo</small></div><div><b>' + money(sum('card')) + '</b><small>tarjeta</small></div><div><b>' + money(sum('transfer')) + '</b><small>transferencia</small></div>' +
-       '<div><b>' + ok.filter(isAdjusted).length + '</b><small>ajustadas</small></div></div>';
+       '<div><b>' + ok.filter(isAdjusted).length + '</b><small>ajustadas</small></div>' +
+       (ok.some(c => c.items.some(i => i.priceEdited)) ? '<div><b>' + ok.filter(c => c.items.some(i => i.priceEdited)).length + '</b><small>con precio ajustado</small></div>' : '') + '</div>';
   h += '<p class="hint">' + newOnes.length + ' cobrada(s) sin exportar · ' + (ok.length - newOnes.length) + ' ya exportada(s). El POS omite automáticamente las que ya importó, así que puedes volver a exportar sin riesgo de duplicar.</p>';
   h += '<div class="row wrap"><button class="pri sp" id="cx-new"' + (newOnes.length ? '' : ' disabled') + '>Exportar cobradas nuevas (' + newOnes.length + ')</button><button class="ghost" id="cx-all"' + (ok.length ? '' : ' disabled') + '>Exportar todas del día (' + ok.length + ')</button></div>';
   h += '<p class="hint">Después abre el POS en la computadora → botón lateral <b>Importar Comandas</b> → elige el archivo. En iPad/iPhone puedes enviarlo por AirDrop, correo o guardarlo en iCloud Drive.</p>';
+  const okSorted = ok.slice().sort((a, b) => String(b.paidAt || '').localeCompare(String(a.paidAt || '')) || b.num - a.num);
+  h += '<h2 style="margin:16px 0 8px">Comandas cobradas (' + ok.length + ')</h2>' + (okSorted.length ? okSorted.map(comandaCard).join('') : '<div class="empty">Aún no hay comandas cobradas en esta fecha</div>');
   $('cierre-body').innerHTML = h;
+  bindCards($('cierre-body'));
   if ($('cx-new')) $('cx-new').onclick = () => exportComandas(newOnes, day);
   if ($('cx-all')) $('cx-all').onclick = () => exportComandas(ok, day);
 }
@@ -701,7 +778,8 @@ function exportPayload(list){
   return { type: 'linaje-comandas', version: 1, exportedAt: new Date().toISOString(),
     comandas: list.map(c => ({ ref: c.id, num: c.num, rawDate: c.rawDate, createdAt: c.createdAt, paidAt: c.paidAt, label: c.label, note: c.note,
       orderType: c.type, service: c.service, adjusted: isAdjusted(c), total: c.total, cash: c.cash || 0, card: c.card || 0, transfer: c.transfer || 0, change: c.change || 0,
-      items: c.items.map(i => ({ key: i.key, productId: i.productId, productName: i.productName, displayName: i.displayName, stews: i.stews || [], category: i.category, priceWithTax: i.priceWithTax, quantity: i.quantity, flavor: i.flavor || null, size: i.size || null })),
+      items: c.items.map(i => ({ key: i.key, productId: i.productId, productName: i.productName, displayName: i.displayName, stews: i.stews || [], category: i.category, priceWithTax: i.priceWithTax, quantity: i.quantity, flavor: i.flavor || null, size: i.size || null, priceEdited: !!i.priceEdited, catalogPrice: i.catalogPrice != null ? i.catalogPrice : i.priceWithTax })),
+      priceAdjusted: c.items.some(i => i.priceEdited),
       originalItems: (c.originalItems || []).map(i => ({ displayName: i.displayName, quantity: i.quantity, priceWithTax: i.priceWithTax })) })) };
 }
 async function saveFile(name, text){
