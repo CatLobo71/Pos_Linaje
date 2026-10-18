@@ -660,14 +660,14 @@ function renderCobro(){
   const total = cobroTotal();
   const tmp = { originalItems: c.originalItems, items: x.items };
   const diff = diffOf(tmp);
-  let h = '<h3>Comanda #' + pad(c.num, 3) + ' · ' + typeLabel(c.type) + (c.label ? ' · ' + esc(c.label) : '') + '</h3>';
+  let h = '<h3>Comanda #' + pad(c.num, 3) + ' · ' + (x.service === 'CORTESIA' ? 'CORTESÍA' : typeLabel(x.service)) + (c.label ? ' · ' + esc(c.label) : '') + '</h3>';
   if (c.status === 'COBRADA') h += '<div class="hint">Cobrada' + (c.exportedAt ? ' y ya exportada al POS (no se puede modificar).' : '. Puedes corregirla y volver a guardar.') + '</div>';
   h += '<div id="cb-lines">' + (x.editable ? linesHtml(x.items, 'cobro') : x.items.map(i => '<div class="line"><div class="nm">' + esc(i.productName) + '<small>' + esc(itemSubLines(i).join(' · ')) + '</small></div><div class="qty"><span>' + i.quantity + '</span></div><div class="pr">' + money(i.priceWithTax * i.quantity) + '</div></div>').join('')) + '</div>';
   if (x.editable) h += '<div class="row" style="margin-top:8px"><button class="acc sp" id="cb-add">+ Agregar producto</button></div>';
   h += '<div class="diff">' + (diff.length ? '<b>Cambios sobre ' + (c.printedAt ? 'lo impreso' : 'lo guardado') + ':</b><br>' + diff.map(d => '<span class="' + (d.s === '+' ? 'p' : 'm') + '">' + d.s + ' ' + esc(d.t) + '</span>').join('<br>') : '<span class="hint">Sin cambios sobre ' + (c.printedAt ? 'lo impreso' : 'lo guardado') + '.</span>') + '</div>';
   h += '<div class="total"><span>Total a cobrar</span><span>' + money(total) + '</span></div>';
   if (x.editable) {
-    h += '<label class="f">Servicio</label><select id="cb-service">' + ['LOCAL','LLEVAR','UBER','CORTESIA'].map(s => '<option' + (x.service === s ? ' selected' : '') + '>' + s + '</option>').join('') + '</select>';
+    h += '<label class="f">Servicio</label><select id="cb-service">' + [['LOCAL','Aquí'],['LLEVAR','Para llevar'],['UBER','Uber'],['CORTESIA','Cortesía']].map(s => '<option value="' + s[0] + '"' + (x.service === s[0] ? ' selected' : '') + '>' + s[1] + '</option>').join('') + '</select>';
     if (x.service !== 'CORTESIA') {
       h += '<label class="f">Forma de pago</label><div class="seg" id="cb-method">' +
         [['EFECTIVO','Efectivo'],['TARJETA','Tarjeta'],['TRANSFERENCIA','Transf.'],['MIXTO','Mixto']].map(m => '<button data-m="' + m[0] + '" class="' + (x.method === m[0] ? 'on' : '') + '">' + m[1] + '</button>').join('') + '</div>';
@@ -711,12 +711,18 @@ function renderCobro(){
 function cobroDirty(){
   const x = cobroCtx; if (!x || !x.editable) return false;
   const c = state.comandas.find(k => k.id === x.id); if (!c) return false;
-  return JSON.stringify(x.items) !== JSON.stringify(c.items);
+  return JSON.stringify(x.items) !== JSON.stringify(c.items) || x.service !== (c.service || c.type);
+}
+// El tipo de servicio elegido en Editar/cobrar también corrige el tipo de la comanda (tarjeta, ticket y exportación).
+function applyService(c, x){
+  c.service = x.service;
+  if (x.service !== 'CORTESIA') c.type = x.service;
 }
 function saveDraft(print){
   const x = cobroCtx, c = state.comandas.find(k => k.id === x.id);
   if (!x.items.length) { toast('La comanda no puede quedar vacía. Cancélala o elimínala.'); return; }
   c.items = clone(x.items); c.total = listTotal(c.items);
+  applyService(c, x);
   if (!c.printedAt) c.originalItems = clone(c.items);   // si nunca se imprimió, no hay papel contra el cual medir cambios
   save();
   if (print) { printComanda(c); toast('Comanda #' + pad(c.num, 3) + ' actualizada e impresa'); }
@@ -740,7 +746,7 @@ function saveCobro(){
       if (Math.abs(cash + card + transfer - total) > 0.01) { toast('La suma de los pagos debe ser ' + money(total)); return; }
     }
   }
-  c.items = clone(x.items); c.total = total; c.service = x.service; c.method = x.method;
+  c.items = clone(x.items); c.total = total; applyService(c, x); c.method = x.method;
   c.cash = cash; c.card = card; c.transfer = transfer; c.change = change;
   c.status = 'COBRADA'; c.paidAt = c.paidAt || new Date().toISOString();
   if (!c.printedAt) c.originalItems = clone(c.items);
