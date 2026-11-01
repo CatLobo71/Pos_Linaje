@@ -142,7 +142,7 @@ input[type=text],input[type=number],input[type=date],select,textarea{width:100%;
       </div>
       <div class="card order-panel" id="order-panel">
         <h2>Pedido <span class="hint" id="next-folio"></span></h2>
-        <div class="row" style="margin-bottom:8px"><button class="acc sm sp" id="btn-online-n">📲 Importar pedido en línea (WhatsApp)</button></div>
+        <div class="row" style="margin-bottom:8px"><button class="ghost sm" id="btn-avail">🚫 Agotados</button><button class="acc sm sp" id="btn-online-n">📲 Importar pedido en línea (WhatsApp)</button></div>
         <div class="seg" id="seg-type">
           <button data-t="LOCAL" class="on">Aquí</button>
           <button data-t="LLEVAR">Llevar</button>
@@ -254,6 +254,8 @@ input[type=text],input[type=number],input[type=date],select,textarea{width:100%;
   <div class="row" style="margin-top:12px"><button class="pri sp" id="prev-print">Imprimir</button><button class="ghost" id="prev-close">Cerrar</button></div>
 </div></div>
 
+<!-- Agotados -->
+<div class="ov mid" id="ov-avail"><div class="sheet" id="avail-sheet"></div></div>
 <!-- Pedido en línea -->
 <div class="ov mid" id="ov-online"><div class="sheet" id="online-sheet"></div></div>
 
@@ -312,6 +314,11 @@ function stewGroupsOf(p, allStews) {
   return [{ label: 'Guisados', min: 1, max: 4, choices: allStews }];
 }
 function flavorsOf(p, all) { return Array.isArray(p.flavorOptions) && p.flavorOptions.length ? p.flavorOptions : all; }
+const DIAS_N = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+function soldOf(cat) { const s = (cat && cat.soldOut) || {}; return { stews: s.stews || [], products: s.products || [] }; }
+function daysLabel(days) { const o = [1, 2, 3, 4, 5, 6, 0].filter(d => days.includes(d)).map(d => DIAS_N[d]); return o.length > 1 ? o.slice(0, -1).join(', ') + ' y ' + o[o.length - 1] : o[0]; }
+function onlyDays(p) { return Array.isArray(p.days) && p.days.length > 0 && p.days.length < 7; }
+function prodBlock(p, sold, dow) { if (sold.products.includes(p.id)) return 'AGOTADO'; if (onlyDays(p) && !p.days.includes(dow)) return 'Solo ' + daysLabel(p.days); return ''; }
 function needsPicker(p){ return p.requiresStew || p.requiresFlavor || p.variants.length > 1; }
 function buildItem(p, vIdx, stews, flavor, qty){
   const v = p.variants[vIdx];
@@ -347,10 +354,11 @@ function renderGrid(el, filter, target){
   prods.forEach(p => {
     const min = Math.min(...p.variants.map(v => v.price));
     const b = document.createElement('button');
-    b.className = 'prod';
+    const blk = prodBlock(p, soldOf(state.catalog), new Date().getDay());
+    b.className = 'prod'; if (blk) b.style.opacity = '.5';
     b.innerHTML = '<b>' + esc(p.name) + '</b><span>' + (p.variants.length > 1 ? 'desde ' : '') + money(min) + '</span>' +
-      (p.requiresStew ? '<small>con guisado</small>' : p.requiresFlavor ? '<small>elige sabor</small>' : '');
-    b.onclick = () => tapProduct(p.id, target);
+      (blk ? '<small style="color:#b00020;font-weight:800">' + esc(blk) + '</small>' : p.requiresStew ? '<small>con guisado</small>' : p.requiresFlavor ? '<small>elige sabor</small>' : '');
+    b.onclick = () => blk ? toast(p.name + ': ' + (blk === 'AGOTADO' ? 'agotado' : blk.toLowerCase())) : tapProduct(p.id, target);
     el.appendChild(b);
   });
 }
@@ -382,7 +390,7 @@ function renderPick(){
   }
   c.groups.forEach((g, gi) => {
     h += '<label class="f">' + esc(g.label) + (g.max > 1 ? ' (hasta ' + g.max + ')' : ' (elige 1)') + (g.min ? ' *' : '') + '</label><div class="chips" data-g="' + gi + '">' +
-      g.choices.map(s => { const n = c.sel[gi].filter(x => x === s).length; return '<button class="chip' + (n ? ' on' : '') + '" data-s="' + esc(s) + '">' + esc(s) + (n > 1 ? ' ×' + n : '') + '</button>'; }).join('') + '</div>';
+      g.choices.map(s => { const n = c.sel[gi].filter(x => x === s).length, out = soldOf(state.catalog).stews.includes(s); return '<button class="chip' + (n ? ' on' : '') + '" data-s="' + esc(s) + '"' + (out ? ' disabled style="opacity:.4;text-decoration:line-through"' : '') + '>' + esc(s) + (out ? ' (agotado)' : '') + (n > 1 ? ' ×' + n : '') + '</button>'; }).join('') + '</div>';
     if (g.max > 1 && c.sel[gi].length) h += '<div class="hint" style="margin-top:6px">Elegidos: ' + c.sel[gi].map((s, i) => '<button class="chip" data-g="' + gi + '" data-rm="' + i + '" style="min-height:30px;font-size:13px">' + esc(s) + ' ✕</button>').join(' ') + '</div>';
   });
   if (p.requiresFlavor) {
@@ -520,6 +528,22 @@ function createComanda(){
   return c;
 }
 
+
+
+/* ---------- Agotados ---------- */
+function renderAvail(){
+  const s = soldOf(state.catalog);
+  let h = '<h3>🚫 Agotados</h3><div class="hint">Lo marcado no se podrá seleccionar. Se guarda en este dispositivo.</div><label class="f">Guisados</label><div class="chips" id="av-st">' +
+    state.catalog.stews.map(x => '<button class="chip' + (s.stews.includes(x) ? ' on' : '') + '" data-v="' + esc(x) + '">' + esc(x) + '</button>').join('') + '</div>' +
+    '<label class="f">Productos</label><div class="chips" id="av-pr">' + state.catalog.products.map(p => '<button class="chip' + (s.products.includes(p.id) ? ' on' : '') + '" data-v="' + p.id + '">' + esc(p.name) + '</button>').join('') + '</div>' +
+    '<div class="row" style="margin-top:12px"><button class="ghost" id="av-clear">Todo disponible</button><button class="pri sp" id="av-close">Listo</button></div>';
+  $('avail-sheet').innerHTML = h;
+  const tog = (kind, v) => { const t = soldOf(state.catalog); const a = t[kind].filter(x => x !== v); if (a.length === t[kind].length) a.push(v); t[kind] = a; state.catalog.soldOut = t; save(); renderAvail(); renderCatalogs(); };
+  $('av-st').querySelectorAll('button').forEach(b => b.onclick = () => tog('stews', b.dataset.v));
+  $('av-pr').querySelectorAll('button').forEach(b => b.onclick = () => tog('products', +b.dataset.v));
+  $('av-clear').onclick = () => { state.catalog.soldOut = { stews: [], products: [] }; save(); renderAvail(); renderCatalogs(); };
+  $('av-close').onclick = () => $('ov-avail').classList.remove('show');
+}
 
 /* ---------- Pedido en línea (WhatsApp) ---------- */
 let onlineCtx = null;
@@ -962,6 +986,7 @@ function init(){
   $('btn-clear').onclick = () => { if (!draft.items.length || confirm('¿Vaciar el pedido actual?')) { draft.items = []; draft.label = ''; draft.note = ''; renderOrder(); save(); } };
   $('btn-save').onclick = () => { const c = createComanda(); if (c) toast('Comanda #' + pad(c.num, 3) + ' guardada'); };
   $('btn-save-print').onclick = () => { const c = createComanda(); if (c) { toast('Comanda #' + pad(c.num, 3) + ' guardada'); printComanda(c); } };
+  $('btn-avail').onclick = () => { renderAvail(); $('ov-avail').classList.add('show'); };
   $('btn-online-l').onclick = openOnline; $('btn-online-n').onclick = openOnline;
   $('cat-banner-go').onclick = e => { e.preventDefault(); showView('ajustes'); };
   $('pb-go').onclick = () => $('order-panel').scrollIntoView({ behavior: 'smooth' });
@@ -981,7 +1006,7 @@ function init(){
   $('file-cat').onchange = e => readJsonFile(e.target, (j, name) => {
     const cat = j && (j.catalogData || (j.products ? j : null));
     if (!cat || !Array.isArray(cat.products) || !cat.products.length) { toast('Ese archivo no trae catálogo de productos'); return; }
-    state.catalog = { categories: cat.categories || DEFAULT_CATALOG.categories, stews: cat.stews || [], flavors: cat.flavors || [], sizes: cat.sizes || [], products: cat.products };
+    state.catalog = { categories: cat.categories || DEFAULT_CATALOG.categories, stews: cat.stews || [], flavors: cat.flavors || [], sizes: cat.sizes || [], products: cat.products, soldOut: soldOf(cat) };
     if (!state.catalog.categories.some(c => c.id === 'all')) state.catalog.categories.unshift({ id: 'all', name: 'Todos los Productos' });
     state.catalogSource = 'Catálogo de ' + name;
     catFilter = 'all'; save(); renderCatalogs(); renderAjustes(); toast('Catálogo actualizado (' + state.catalog.products.length + ' productos)');
